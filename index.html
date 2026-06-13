@@ -386,11 +386,13 @@ header {
 .wl-group-head { display: flex; align-items: center; gap: 11px; padding: 10px 12px; cursor: pointer; user-select: none; transition: background 0.15s; }
 .wl-group-head:hover { background: var(--surface2); }
 .wl-group.open .season-chevron { transform: rotate(90deg); }
-.wl-group-poster { width: 72px; height: 108px; border-radius: 7px; object-fit: cover; flex-shrink: 0; background: var(--surface2); cursor: pointer; }
-.wl-group-poster-ph { width: 72px; height: 108px; border-radius: 7px; background: var(--surface2); display: flex; align-items: center; justify-content: center; font-size: 26px; color: var(--muted); flex-shrink: 0; }
+.wl-group-poster { width: 90px; height: 135px; border-radius: 8px; object-fit: cover; flex-shrink: 0; background: var(--surface2); cursor: pointer; }
+.wl-group-poster-ph { width: 90px; height: 135px; border-radius: 8px; background: var(--surface2); display: flex; align-items: center; justify-content: center; font-size: 30px; color: var(--muted); flex-shrink: 0; }
 .wl-group-info { flex: 1; min-width: 0; }
 .wl-group-name { font-size: 13px; font-weight: 600; color: var(--ink); line-height: 1.3; }
 .wl-group-count { font-size: 11px; color: var(--accent); margin-top: 3px; font-weight: 500; }
+.wl-next { font-size: 12px; color: var(--ink2); margin-top: 4px; line-height: 1.35; }
+.wl-next .se { font-weight: 600; color: var(--accent); margin-right: 5px; }
 .wl-group-eps { display: none; border-top: 1px solid var(--rule); }
 .wl-group.open .wl-group-eps { display: block; }
 
@@ -1215,6 +1217,17 @@ function pendingCount(sid) {
   for (const ep of c.all) if (isAired(ep.air_date) && !w[epKey(ep.season, ep.episode)]) n++;
   return n;
 }
+/* Prochain épisode à regarder (le plus ancien diffusé non vu) */
+function nextToWatch(sid) {
+  const c = epCache[sid]; if (!c) return null;
+  const w = S.watched[sid] || {};
+  let best = null;
+  for (const ep of c.all) {
+    if (!isAired(ep.air_date) || w[epKey(ep.season, ep.episode)]) continue;
+    if (!best || ep.season < best.season || (ep.season === best.season && ep.episode < best.episode)) best = ep;
+  }
+  return best;
+}
 function seasonPending(sid, sn) {
   const c = epCache[sid]; if (!c) return 0;
   const w = S.watched[sid] || {};
@@ -1267,8 +1280,9 @@ function makeWatchlistGroup(g) {
 
   const info = document.createElement('div'); info.className = 'wl-group-info'; info.style.cursor = 'pointer';
   const nm = document.createElement('div'); nm.className = 'wl-group-name'; nm.textContent = g.name;
+  const next = document.createElement('div'); next.className = 'wl-next';
   const cnt = document.createElement('div'); cnt.className = 'wl-group-count';
-  info.appendChild(nm); info.appendChild(cnt);
+  info.appendChild(nm); info.appendChild(next); info.appendChild(cnt);
 
   const prog = document.createElement('div'); prog.className = 'wl-progress'; prog.style.marginTop = '5px';
   const bar = document.createElement('div'); bar.className = 'wl-bar';
@@ -1291,6 +1305,15 @@ function makeWatchlistGroup(g) {
     const seen = watchedCount(g.sid);
     const pct = g.total ? Math.min(100, Math.round((seen / g.total) * 100)) : 0;
     fill.style.width = pct + '%';
+    const nx = nextToWatch(g.sid) || g.eps[0];
+    if (nx) {
+      const title = nx.name || nx.epName || '';
+      next.innerHTML = '';
+      const se = document.createElement('span'); se.className = 'se'; se.textContent = sxe(nx.season, nx.episode);
+      next.appendChild(se);
+      if (title) next.appendChild(document.createTextNode(title));
+      next.style.display = '';
+    } else { next.style.display = 'none'; }
   }
   paintHeader(g.eps.length);
 
