@@ -92,6 +92,9 @@ header {
 
 /* ─── MAIN ─── */
 #appContent { min-height: calc(100vh - 60px); padding-bottom: calc(var(--navh) + var(--safe-bot) + 8px); }
+@supports (height: 100dvh) {
+  #appContent { min-height: calc(100dvh - 60px); }
+}
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
 
@@ -358,14 +361,33 @@ header {
 .ep-row.upcoming .ep-date { color: var(--muted); font-style: italic; }
 .season-eps-loading { padding: 12px 12px 12px 33px; font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
 
+/* ─── QUALITÉ PAR SAISON ─── */
+.quality-chart { display: flex; align-items: flex-end; gap: 8px; padding: 10px 4px 2px; overflow-x: auto; scrollbar-width: none; }
+.qc-col { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 34px; }
+.qc-val { font-size: 10px; font-weight: 600; color: var(--ink2); }
+.qc-bar-wrap { height: 64px; width: 22px; display: flex; align-items: flex-end; background: var(--surface2); border-radius: 5px; overflow: hidden; }
+.qc-bar { width: 100%; background: var(--accent); border-radius: 5px 5px 0 0; transition: height 0.3s; }
+.qc-bar.hi { background: var(--stream); }
+.qc-bar.lo { background: var(--soon); }
+.qc-lbl { font-size: 10px; color: var(--muted); font-weight: 600; }
+
+/* ─── PLAN DE RATTRAPAGE ─── */
+.binge-box { background: var(--surface2); border-radius: var(--radius-sm); padding: 12px 14px; border-left: 3px solid var(--soon); }
+.binge-head { font-size: 13px; font-weight: 600; color: var(--ink); }
+.binge-sub { font-size: 12px; color: var(--ink2); margin-top: 4px; line-height: 1.5; }
+.binge-sel { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.binge-sel-lbl { font-size: 11px; color: var(--muted); margin-right: 2px; }
+.binge-pace { width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid var(--rule); background: var(--surface); color: var(--ink2); font-size: 12px; font-weight: 600; cursor: pointer; }
+.binge-pace.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
 /* ─── WATCHLIST GROUPÉE PAR SÉRIE ─── */
 .wl-group { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--surface); margin: 10px 14px 0; box-shadow: var(--shadow); }
 .wl-group:last-child { margin-bottom: 4px; }
 .wl-group-head { display: flex; align-items: center; gap: 11px; padding: 10px 12px; cursor: pointer; user-select: none; transition: background 0.15s; }
 .wl-group-head:hover { background: var(--surface2); }
 .wl-group.open .season-chevron { transform: rotate(90deg); }
-.wl-group-poster { width: 40px; height: 60px; border-radius: 5px; object-fit: cover; flex-shrink: 0; background: var(--surface2); cursor: pointer; }
-.wl-group-poster-ph { width: 40px; height: 60px; border-radius: 5px; background: var(--surface2); display: flex; align-items: center; justify-content: center; font-size: 18px; color: var(--muted); flex-shrink: 0; }
+.wl-group-poster { width: 56px; height: 84px; border-radius: 6px; object-fit: cover; flex-shrink: 0; background: var(--surface2); cursor: pointer; }
+.wl-group-poster-ph { width: 56px; height: 84px; border-radius: 6px; background: var(--surface2); display: flex; align-items: center; justify-content: center; font-size: 22px; color: var(--muted); flex-shrink: 0; }
 .wl-group-info { flex: 1; min-width: 0; }
 .wl-group-name { font-size: 13px; font-weight: 600; color: var(--ink); line-height: 1.3; }
 .wl-group-count { font-size: 11px; color: var(--accent); margin-top: 3px; font-weight: 500; }
@@ -442,6 +464,7 @@ header {
       <div class="sub-tabs">
         <button class="sub-btn active" id="subPopular" onclick="switchDiscover('popular')">🔥 Populaires</button>
         <button class="sub-btn" id="subTop" onclick="switchDiscover('top')">⭐ Mieux notées</button>
+        <button class="sub-btn" id="subReco" onclick="switchDiscover('reco')">✨ Pour vous</button>
       </div>
       <div class="sub-panel visible" id="discover-popular-panel">
         <div class="series-grid" id="grid-popular">
@@ -453,6 +476,10 @@ header {
       </div>
       <div class="sub-panel" id="discover-top-panel">
         <div class="series-grid" id="grid-top"></div>
+      </div>
+      <div class="sub-panel" id="discover-reco-panel">
+        <div class="status-note" id="reco-note" style="padding:0 20px 10px"></div>
+        <div class="series-grid" id="grid-reco"></div>
       </div>
     </div>
   </div>
@@ -548,18 +575,32 @@ let S = { series: [], watched: {} };
 
 // Caches (locaux, régénérables — NON exportés)
 let detailsCache = {};      // id -> { data, ts }   (persisté)
-const epCache = {};         // id -> { all:[...], ts } (session uniquement)
+let epCache = {};           // id -> { all:[...], ts, ended } (persisté)
+let tvmCache = {};          // id -> { data, ts }   (persisté — TVmaze)
+const EP_KEY  = 'seriestracker-episodes-v1';
+const TVM_KEY = 'seriestracker-tvmaze-v1';
+const EP_TTL_RUNNING = 12 * 3600 * 1000;       // série en cours : 12h
+const EP_TTL_ENDED   = 7 * 24 * 3600 * 1000;   // série terminée : 7 jours
 
 function loadState() {
   try { const raw = localStorage.getItem(STORE_KEY); if (raw) S = { series: [], watched: {}, ...JSON.parse(raw) }; } catch(e) {}
   if (!S.watched) S.watched = {};
   if (!S.series)  S.series  = [];
   try { const raw = localStorage.getItem(DETAILS_KEY); if (raw) detailsCache = JSON.parse(raw); } catch(e) {}
+  try { const raw = localStorage.getItem(EP_KEY);  if (raw) epCache  = JSON.parse(raw); } catch(e) {}
+  try { const raw = localStorage.getItem(TVM_KEY); if (raw) tvmCache = JSON.parse(raw); } catch(e) {}
 }
 function saveState() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch(e) {} }
 function persistDetails() {
   try { localStorage.setItem(DETAILS_KEY, JSON.stringify(detailsCache)); }
   catch(e) { detailsCache = {}; } // quota dépassé → on abandonne le cache persistant
+}
+function persistEpisodes() {
+  try { localStorage.setItem(EP_KEY, JSON.stringify(epCache)); }
+  catch(e) {} // quota dépassé → cache mémoire seulement
+}
+function persistTvm() {
+  try { localStorage.setItem(TVM_KEY, JSON.stringify(tvmCache)); } catch(e) {}
 }
 
 /* ═══════════════════════════════════════════
@@ -610,26 +651,77 @@ async function ensureDetails(id, force=false) {
   return data;
 }
 
-/* Liste de tous les épisodes (saisons >= 1) — cache session */
-async function ensureEpisodes(id, details) {
-  const c = epCache[id];
-  if (c) return c.all;
-  const seasons = (details.seasons || []).filter(s => s.season_number >= 1);
-  const all = [];
-  for (const s of seasons) {
-    try {
-      const data = await tmdb('/tv/' + id + '/season/' + s.season_number);
-      for (const ep of (data.episodes || [])) {
-        all.push({
-          season: ep.season_number, episode: ep.episode_number,
-          name: ep.name, air_date: ep.air_date, runtime: ep.runtime,
-        });
-      }
-    } catch(e) {}
-    await sleep(120); // séquentiel + délai (fiabilité, cf. GitHub Pages)
+/* Exécute fn sur items avec au plus n requêtes simultanées */
+async function pool(items, n, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  async function worker() {
+    while (i < items.length) { const idx = i++; try { out[idx] = await fn(items[idx], idx); } catch(e) { out[idx] = null; } }
   }
-  epCache[id] = { all, ts: Date.now() };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+  return out;
+}
+
+/* Liste de tous les épisodes (saisons >= 1) — cache persisté
+   TTL : 12h (série en cours) / 7 jours (terminée) */
+async function ensureEpisodes(id, details) {
+  const ended = !STATUS_ACTIVE.includes(details.status);
+  const ttl = ended ? EP_TTL_ENDED : EP_TTL_RUNNING;
+  const c = epCache[id];
+  if (c && c.all && (Date.now() - c.ts < ttl)) return c.all;
+  const seasons = (details.seasons || []).filter(s => s.season_number >= 1);
+  const chunks = await pool(seasons, 4, async (s) => {
+    const data = await tmdb('/tv/' + id + '/season/' + s.season_number);
+    return (data.episodes || []).map(ep => ({
+      season: ep.season_number, episode: ep.episode_number,
+      name: ep.name, air_date: ep.air_date, runtime: ep.runtime,
+    }));
+  });
+  const all = [];
+  for (const ch of chunks) if (ch) all.push(...ch);
+  epCache[id] = { all, ts: Date.now(), ended };
+  persistEpisodes();
   return all;
+}
+
+/* ── TVmaze : heure réelle de diffusion + statut (annulation) ──
+   Lookup par imdb_id/tvdb_id (via TMDB external_ids), caché 12h */
+async function tvmFetch(path) {
+  const r = await fetch('https://api.tvmaze.com' + path);
+  if (!r.ok) throw new Error('TVmaze ' + r.status);
+  return r.json();
+}
+async function ensureTvmaze(id) {
+  const c = tvmCache[id];
+  if (c && (Date.now() - c.ts < DETAILS_TTL)) return c.data;
+  try {
+    const ext = await tmdb('/tv/' + id + '/external_ids');
+    let show = null;
+    try { if (ext.imdb_id) show = await tvmFetch('/lookup/shows?imdb=' + ext.imdb_id); } catch(e) {}
+    if (!show && ext.tvdb_id) { try { show = await tvmFetch('/lookup/shows?thetvdb=' + ext.tvdb_id); } catch(e) {} }
+    let nextEp = null;
+    if (show && show._links && show._links.nextepisode) {
+      const m = String(show._links.nextepisode.href).match(/episodes\/(\d+)/);
+      if (m) { try { nextEp = await tvmFetch('/episodes/' + m[1]); } catch(e) {} }
+    }
+    const data = show ? {
+      status: show.status,   // Running | Ended | To Be Determined | In Development
+      time: (show.schedule && show.schedule.time) || null,
+      network: (show.network && show.network.name) || (show.webChannel && show.webChannel.name) || null,
+      nextAirstamp: (nextEp && nextEp.airstamp) || null,
+      nextSeason: nextEp ? nextEp.season : null,
+      nextNumber: nextEp ? nextEp.number : null,
+    } : null;
+    tvmCache[id] = { data, ts: Date.now() };
+    persistTvm();
+    return data;
+  } catch(e) {
+    return (c && c.data) || null;
+  }
+}
+function fmtTime(iso) {
+  try { return new Date(iso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }); }
+  catch(e) { return null; }
 }
 
 /* ═══════════════════════════════════════════
@@ -655,9 +747,58 @@ function switchDiscover(view) {
   discoverView = view;
   document.getElementById('subPopular').classList.toggle('active', view==='popular');
   document.getElementById('subTop').classList.toggle('active', view==='top');
+  document.getElementById('subReco').classList.toggle('active', view==='reco');
   document.getElementById('discover-popular-panel').classList.toggle('visible', view==='popular');
   document.getElementById('discover-top-panel').classList.toggle('visible', view==='top');
+  document.getElementById('discover-reco-panel').classList.toggle('visible', view==='reco');
   if (view === 'top' && !tabLoaded.top) { tabLoaded.top = true; loadTopRated(); }
+  if (view === 'reco') loadRecos();
+}
+
+/* ── Recommandations agrégées sur tout le profil ──
+   /recommendations de chaque série suivie, classées par fréquence */
+let _recoSig = '';
+async function loadRecos() {
+  const grid = document.getElementById('grid-reco');
+  const note = document.getElementById('reco-note');
+  if (!S.series.length) {
+    grid.innerHTML = '';
+    note.textContent = 'Suivez d\'abord des séries : les recommandations sont calculées à partir de votre profil.';
+    return;
+  }
+  const sig = S.series.map(s => s.id).sort().join(',');
+  if (sig === _recoSig && grid.children.length) return; // déjà calculé pour ce profil
+  _recoSig = sig;
+
+  note.textContent = '';
+  grid.innerHTML = '<div class="loader-wrap" style="grid-column:1/-1"><div class="spinner"></div><span>Analyse de votre profil…</span></div>';
+
+  const followed = new Set(S.series.map(s => s.id));
+  const src = S.series.slice(0, 25); // borne le nombre d'appels
+  const tally = new Map(); // id -> { serie, count }
+  await pool(src, 4, async (s) => {
+    const data = await tmdb('/tv/' + s.id + '/recommendations');
+    for (const r of (data.results || [])) {
+      if (followed.has(r.id) || !r.poster_path) continue;
+      const t = tally.get(r.id);
+      if (t) t.count++;
+      else tally.set(r.id, { serie: r, count: 1 });
+    }
+  });
+
+  const ranked = [...tally.values()]
+    .sort((a, b) => b.count - a.count || (b.serie.vote_average || 0) - (a.serie.vote_average || 0))
+    .slice(0, 30);
+
+  grid.innerHTML = '';
+  if (!ranked.length) {
+    note.textContent = 'Pas encore assez de signal — ajoutez quelques séries de plus.';
+    return;
+  }
+  note.textContent = 'Classées selon leur affinité avec les ' + src.length + ' séries de votre profil.';
+  for (const { serie, count } of ranked) {
+    grid.appendChild(makePosterEl(serie, { subline: count > 1 ? 'Affinité avec ' + count + ' de vos séries' : undefined }));
+  }
 }
 
 /* ═══════════════════════════════════════════
@@ -682,7 +823,7 @@ function toggleFollow(serie) {
   updateBadges();
   document.querySelectorAll('.btn-add-fav[data-id="' + serie.id + '"]').forEach(b => {
     b.classList.toggle('saved', isFollowed(serie.id));
-    b.textContent = isFollowed(serie.id) ? '★' : '+';
+    b.innerHTML = favGlyph(isFollowed(serie.id));
   });
   const mfb = document.getElementById('modal-fav-btn');
   if (mfb && Number(mfb.dataset.id) === serie.id) {
@@ -705,6 +846,12 @@ function updateBadges() {
 /* ═══════════════════════════════════════════
    CARTE POCHETTE
 ═══════════════════════════════════════════ */
+function favGlyph(saved) {
+  return saved
+    ? '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="display:block"><path d="M12 2l2.9 6.26L21.5 9.3l-4.75 4.3L18 20.5 12 17l-6 3.5 1.25-6.9L2.5 9.3l6.6-1.04z"/></svg>'
+    : '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="display:block"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>';
+}
+
 function makePosterEl(serie, options={}) {
   const card = document.createElement('div');
   card.className = 'series-card';
@@ -732,7 +879,7 @@ function makePosterEl(serie, options={}) {
   const fav = document.createElement('button');
   fav.className = 'btn-add-fav' + (isFollowed(serie.id) ? ' saved' : '');
   fav.dataset.id = serie.id;
-  fav.textContent = isFollowed(serie.id) ? '★' : '+';
+  fav.innerHTML = favGlyph(isFollowed(serie.id));
   fav.title = 'Suivre';
   fav.addEventListener('click', e => { e.stopPropagation(); toggleFollow(serie); });
   wrap.appendChild(fav);
@@ -885,19 +1032,27 @@ async function renderMySeries() {
   root.innerHTML = '<div class="loader-wrap"><div class="spinner"></div><span>Chargement de vos séries…</span></div>';
 
   const next = [], waiting = [], ended = [];
-  for (const s of S.series) {
-    try {
-      const d = await ensureDetails(s.id);
-      const merged = { ...s, ...d };
-      if (d.next_episode_to_air && d.next_episode_to_air.air_date) {
-        next.push(merged);
-      } else if (STATUS_ACTIVE.includes(d.status)) {
-        waiting.push(merged);
-      } else {
-        ended.push(merged);
-      }
-    } catch(e) {
-      ended.push({ ...s, status: '?' });
+  const detailed = await pool(S.series, 4, async (s) => ({ s, d: await ensureDetails(s.id) }));
+  for (let i = 0; i < detailed.length; i++) {
+    const r = detailed[i];
+    if (!r || !r.d) { ended.push({ ...S.series[i], status: '?' }); continue; }
+    const merged = { ...r.s, ...r.d };
+    if (r.d.next_episode_to_air && r.d.next_episode_to_air.air_date) next.push(merged);
+    else if (STATUS_ACTIVE.includes(r.d.status)) waiting.push(merged);
+    else ended.push(merged);
+  }
+
+  // TVmaze : statut plus frais que TMDB pour les séries "en attente"
+  // Ended → annulée/terminée ; To Be Determined → renouvellement incertain
+  await pool(waiting.slice(), 4, async (s) => { s._tvm = await ensureTvmaze(s.id); });
+  for (let i = waiting.length - 1; i >= 0; i--) {
+    const tv = waiting[i]._tvm;
+    if (tv && tv.status === 'Ended') {
+      const s = waiting.splice(i, 1)[0];
+      s._cancelled = true;
+      ended.unshift(s);
+    } else if (tv && tv.status === 'To Be Determined') {
+      waiting[i]._tbd = true;
     }
   }
   next.sort((a,b) => new Date(a.next_episode_to_air.air_date) - new Date(b.next_episode_to_air.air_date));
@@ -919,7 +1074,7 @@ async function renderMySeries() {
   } else {
     const g = document.createElement('div'); g.className = 'series-grid'; g.id = 'grid-waiting';
     root.appendChild(g);
-    for (const s of waiting) g.appendChild(makePosterEl(s, { statusChip: { text: STATUS_FR[s.status] || 'En cours', cls: 'wait' } }));
+    for (const s of waiting) g.appendChild(makePosterEl(s, { statusChip: { text: s._tbd ? 'Renouvellement ?' : (STATUS_FR[s.status] || 'En cours'), cls: 'wait' } }));
   }
 
   // ── Section 3 : terminées ──
@@ -929,7 +1084,7 @@ async function renderMySeries() {
   } else {
     const g = document.createElement('div'); g.className = 'series-grid'; g.id = 'grid-ended';
     root.appendChild(g);
-    for (const s of ended) g.appendChild(makePosterEl(s, { statusChip: { text: STATUS_FR[s.status] || 'Terminée', cls: 'ended' } }));
+    for (const s of ended) g.appendChild(makePosterEl(s, { statusChip: { text: s._cancelled ? 'Annulée' : (STATUS_FR[s.status] || 'Terminée'), cls: 'ended' } }));
   }
 }
 
@@ -972,6 +1127,17 @@ function makeNextEpRow(s) {
   body.appendChild(meta);
   row.appendChild(body);
 
+  // Heure réelle (TVmaze, asynchrone, mise à jour de la ligne)
+  let airstamp = null;
+  ensureTvmaze(s.id).then(tv => {
+    if (!tv || !tv.nextAirstamp) return;
+    const sameEp = (tv.nextSeason == null) || (tv.nextSeason === ne.season_number && tv.nextNumber === ne.episode_number);
+    if (!sameEp) return;
+    airstamp = tv.nextAirstamp;
+    const t = fmtTime(airstamp);
+    if (t) { const ts = document.createElement('span'); ts.textContent = '🕐 ' + t; meta.insertBefore(ts, meta.children[1] || null); }
+  }).catch(() => {});
+
   const right = document.createElement('div'); right.className = 'next-ep-right';
   const days = daysUntil(ne.air_date);
   const pill = document.createElement('div'); pill.className = 'countdown-pill' + (days <= 2 ? ' soon' : '');
@@ -982,7 +1148,7 @@ function makeNextEpRow(s) {
   ics.innerHTML = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Calendrier';
   ics.addEventListener('click', e => {
     e.stopPropagation();
-    downloadIcs((s.name || s.original_name), ne.air_date, sxe(ne.season_number, ne.episode_number) + (ne.name ? ' · ' + ne.name : ''));
+    downloadIcs((s.name || s.original_name), ne.air_date, sxe(ne.season_number, ne.episode_number) + (ne.name ? ' · ' + ne.name : ''), airstamp);
   });
   right.appendChild(ics);
   row.appendChild(right);
@@ -1005,29 +1171,27 @@ async function rebuildWatchlist(force) {
     return;
   }
   if (watchlistBuilt && !force) { renderWatchlist(); return; }
-  if (force) { for (const k in epCache) delete epCache[k]; }
+  if (force) { epCache = {}; persistEpisodes(); }
 
   root.innerHTML = '<div class="loader-wrap"><div class="spinner"></div><span>Analyse des épisodes diffusés…</span></div>';
 
   const today = new Date(); today.setHours(23,59,59,999);
   const rows = [];
-  for (const s of S.series) {
-    try {
-      const d = await ensureDetails(s.id);
-      const eps = await ensureEpisodes(s.id, d);
-      const total = d.number_of_episodes || eps.length;
-      const w = S.watched[s.id] || {};
-      for (const ep of eps) {
-        if (!ep.air_date) continue;
-        if (new Date(ep.air_date) > today) continue;     // pas encore diffusé
-        if (w[epKey(ep.season, ep.episode)]) continue;    // déjà vu
-        rows.push({
-          sid: s.id, name: s.name || d.name, poster_path: s.poster_path || d.poster_path,
-          season: ep.season, episode: ep.episode, epName: ep.name, air_date: ep.air_date, total,
-        });
-      }
-    } catch(e) {}
-  }
+  await pool(S.series, 4, async (s) => {
+    const d = await ensureDetails(s.id);
+    const eps = await ensureEpisodes(s.id, d);
+    const total = d.number_of_episodes || eps.length;
+    const w = S.watched[s.id] || {};
+    for (const ep of eps) {
+      if (!ep.air_date) continue;
+      if (new Date(ep.air_date) > today) continue;     // pas encore diffusé
+      if (w[epKey(ep.season, ep.episode)]) continue;    // déjà vu
+      rows.push({
+        sid: s.id, name: s.name || d.name, poster_path: s.poster_path || d.poster_path,
+        season: ep.season, episode: ep.episode, epName: ep.name, air_date: ep.air_date, total,
+      });
+    }
+  });
   rows.sort((a,b) => new Date(b.air_date) - new Date(a.air_date)); // plus récent en haut
   watchlistData = rows;
   watchlistCount = rows.length;
@@ -1348,6 +1512,13 @@ async function openSerieModal(id) {
       content.appendChild(row);
     }
 
+    // courbe de qualité par saison (notes TMDB)
+    const ratedSeasons = (d.seasons || []).filter(s => s.season_number >= 1 && s.vote_average > 0);
+    if (ratedSeasons.length >= 2) {
+      content.appendChild(sectionTitle('Qualité par saison'));
+      content.appendChild(buildQualityChart(ratedSeasons));
+    }
+
     // prochain épisode
     if (d.next_episode_to_air && d.next_episode_to_air.air_date) {
       const ne = d.next_episode_to_air;
@@ -1361,10 +1532,25 @@ async function openSerieModal(id) {
       m.textContent = fmtDateLong(ne.air_date) + ' — ' + daysLabel(days);
       box.appendChild(m);
       content.appendChild(box);
+      // heure réelle (TVmaze)
+      ensureTvmaze(id).then(tv => {
+        if (_currentModalId !== id || !tv || !tv.nextAirstamp) return;
+        const sameEp = (tv.nextSeason == null) || (tv.nextSeason === ne.season_number && tv.nextNumber === ne.episode_number);
+        const t2 = sameEp ? fmtTime(tv.nextAirstamp) : null;
+        if (t2) m.textContent = fmtDateLong(ne.air_date) + ' à ' + t2 + ' — ' + daysLabel(days);
+      }).catch(() => {});
+    } else {
+      // pas de date : signaler annulation / incertitude via TVmaze
+      ensureTvmaze(id).then(tv => {
+        if (_currentModalId !== id || !tv) return;
+        if (tv.status === 'Ended' && STATUS_ACTIVE.includes(d.status)) pills.appendChild(pill('mpill-status ended', 'Annulée (TVmaze)'));
+        else if (tv.status === 'To Be Determined') pills.appendChild(pill('mpill-status wait', 'Renouvellement incertain'));
+      }).catch(() => {});
     }
 
     // saisons & épisodes (uniquement pour les séries suivies)
     if (isFollowed(id)) {
+      content.appendChild(buildBingePlanner(d, id));
       content.appendChild(buildSeasonsSection(d, id));
     }
 
@@ -1425,6 +1611,85 @@ function seasonWatchedCount(sid, season) {
 function invalidateWatchlist() {
   watchlistBuilt = false;          // reconstruction à la prochaine ouverture de l'onglet
   recomputeWatchlistCount();       // badge à jour sans reconstruire (ne replie pas l'accordéon)
+}
+
+/* ── Courbe de qualité : note moyenne TMDB par saison ── */
+function buildQualityChart(seasons) {
+  const wrap = document.createElement('div'); wrap.className = 'quality-chart';
+  const max = 10;
+  for (const s of seasons) {
+    const col = document.createElement('div'); col.className = 'qc-col';
+    const val = document.createElement('div'); val.className = 'qc-val'; val.textContent = s.vote_average.toFixed(1);
+    const barWrap = document.createElement('div'); barWrap.className = 'qc-bar-wrap';
+    const bar = document.createElement('div'); bar.className = 'qc-bar';
+    const pct = Math.max(6, Math.round((s.vote_average / max) * 100));
+    bar.style.height = pct + '%';
+    if (s.vote_average >= 8) bar.classList.add('hi');
+    else if (s.vote_average < 6.5) bar.classList.add('lo');
+    barWrap.appendChild(bar);
+    const lbl = document.createElement('div'); lbl.className = 'qc-lbl'; lbl.textContent = 'S' + s.season_number;
+    col.appendChild(val); col.appendChild(barWrap); col.appendChild(lbl);
+    wrap.appendChild(col);
+  }
+  return wrap;
+}
+
+/* ── Binge planner : retard + date de fin estimée ── */
+function buildBingePlanner(d, sid) {
+  const frag = document.createDocumentFragment();
+  const title = sectionTitle('Plan de rattrapage');
+  const box = document.createElement('div'); box.className = 'binge-box';
+  box.innerHTML = '<div class="season-eps-loading"><div class="spinner"></div><span>Calcul…</span></div>';
+  frag.appendChild(title); frag.appendChild(box);
+  title.style.display = 'none'; box.style.display = 'none';
+
+  (async () => {
+    try {
+      const eps = await ensureEpisodes(sid, d);
+      const w = S.watched[sid] || {};
+      const pendingEps = eps.filter(ep => isAired(ep.air_date) && !w[epKey(ep.season, ep.episode)]);
+      if (!pendingEps.length) return; // à jour : pas de section
+      const avgRt = (d.episode_run_time && d.episode_run_time[0]) || 45;
+      let mins = 0;
+      for (const ep of pendingEps) mins += (ep.runtime || avgRt);
+      const hrs = Math.floor(mins / 60), rem = mins % 60;
+
+      box.innerHTML = '';
+      const head = document.createElement('div'); head.className = 'binge-head';
+      head.textContent = pendingEps.length + ' épisode' + (pendingEps.length>1?'s':'') + ' de retard · ' + hrs + ' h' + (rem ? ' ' + pad2(rem) : '');
+      box.appendChild(head);
+
+      const sub = document.createElement('div'); sub.className = 'binge-sub';
+      box.appendChild(sub);
+
+      const sel = document.createElement('div'); sel.className = 'binge-sel';
+      const lbl = document.createElement('span'); lbl.className = 'binge-sel-lbl'; lbl.textContent = 'Rythme :';
+      sel.appendChild(lbl);
+      let pace = 2;
+      function renderPlan() {
+        const days = Math.ceil(pendingEps.length / pace);
+        const end = new Date(); end.setDate(end.getDate() + days - 1);
+        let txt = 'À ' + pace + ' ép./soir, terminé le ' + fmtDate(end.toISOString());
+        const ne = d.next_episode_to_air;
+        if (ne && ne.air_date) {
+          const ready = end < new Date(ne.air_date);
+          txt += ready ? ' — prêt avant ' + sxe(ne.season_number, ne.episode_number) + ' ✓'
+                       : ' — après la diffusion de ' + sxe(ne.season_number, ne.episode_number) + ' ⚠️';
+        }
+        sub.textContent = txt;
+      }
+      for (const p of [1,2,3]) {
+        const b = document.createElement('button'); b.className = 'binge-pace' + (p===pace?' active':''); b.textContent = p;
+        b.addEventListener('click', () => { pace = p; sel.querySelectorAll('.binge-pace').forEach(x=>x.classList.toggle('active', Number(x.textContent)===p)); renderPlan(); });
+        sel.appendChild(b);
+      }
+      box.appendChild(sel);
+      renderPlan();
+      title.style.display = ''; box.style.display = '';
+    } catch(e) {}
+  })();
+
+  return frag;
 }
 
 function buildSeasonsSection(d, sid) {
@@ -1610,17 +1875,27 @@ function fmtIcsLocal(dateStr, hour, min) {
   return d.getFullYear() + p(d.getMonth()+1) + p(d.getDate()) + 'T' + p(hour) + p(min) + '00';
 }
 function escIcs(s) { return (s||'').replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\n/g,'\\n'); }
-function downloadIcs(serieName, dateStr, epLabel) {
+function downloadIcs(serieName, dateStr, epLabel, airstamp) {
   const uid = 'seriestracker-' + Date.now() + '@local';
   const now = fmtIcsLocal(new Date().toISOString(), new Date().getHours(), new Date().getMinutes());
-  const dtS = fmtIcsLocal(dateStr, 21, 0);
-  const dtE = fmtIcsLocal(dateStr, 22, 0);
+  let dtS, dtE, noteHeure;
+  if (airstamp) {
+    const start = new Date(airstamp);
+    const end = new Date(start.getTime() + 3600000);
+    dtS = fmtIcsLocal(start.toISOString(), start.getHours(), start.getMinutes());
+    dtE = fmtIcsLocal(end.toISOString(), end.getHours(), end.getMinutes());
+    noteHeure = 'heure réelle de diffusion';
+  } else {
+    dtS = fmtIcsLocal(dateStr, 21, 0);
+    dtE = fmtIcsLocal(dateStr, 22, 0);
+    noteHeure = 'heure indicative';
+  }
   const ics = [
     'BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Serie Tracker//FR','CALSCALE:GREGORIAN','METHOD:PUBLISH',
     'BEGIN:VEVENT','UID:' + uid, 'DTSTAMP:' + now,
     'DTSTART;TZID=Europe/Paris:' + dtS, 'DTEND;TZID=Europe/Paris:' + dtE,
     'SUMMARY:' + escIcs('📺 ' + serieName + ' — ' + epLabel),
-    'DESCRIPTION:' + escIcs('Diffusion : ' + serieName + ' ' + epLabel + ' (heure indicative)'),
+    'DESCRIPTION:' + escIcs('Diffusion : ' + serieName + ' ' + epLabel + ' (' + noteHeure + ')'),
     'BEGIN:VALARM','TRIGGER:-PT60M','ACTION:DISPLAY','DESCRIPTION:' + escIcs('Diffusion — ' + serieName),
     'END:VALARM','END:VEVENT','END:VCALENDAR',
   ].join('\r\n');
