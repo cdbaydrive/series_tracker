@@ -43,23 +43,20 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-html { height: 100%; }
-body {
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
+html, body {
+  height: 100%;
   background: var(--bg);
   color: var(--ink);
   font-family: var(--font-body);
   font-size: 14px;
-  overflow: hidden;
+  overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
 }
-@supports (height: 100dvh) { body { height: 100dvh; } }
 
 /* ─── HEADER ─── */
 header {
-  flex-shrink: 0;
+  position: sticky;
+  top: 0;
   z-index: 200;
   background: rgba(8,8,10,0.8);
   backdrop-filter: saturate(180%) blur(20px);
@@ -95,7 +92,7 @@ header {
 .btn-icon:hover { background: var(--surface3); color: var(--ink); }
 
 /* ─── MAIN ─── */
-#appContent { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; overflow-x: hidden; padding-bottom: 8px; }
+#appContent { min-height: calc(100vh - 88px); }
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
 
@@ -136,9 +133,11 @@ header {
 .btn-search:disabled { opacity: 0.4; cursor: default; }
 
 /* ─── SUB TABS (segmented) ─── */
-.sub-tabs { display: flex; gap: 8px; padding: 0 20px 14px; flex-wrap: wrap; }
+.sub-tabs { display: flex; gap: 6px; padding: 0 14px 14px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.sub-tabs::-webkit-scrollbar { display: none; }
+.sub-btn { flex-shrink: 0; white-space: nowrap; }
 .sub-btn {
-  padding: 7px 16px; border-radius: 20px; font-size: 12px; font-weight: 500; cursor: pointer;
+  padding: 7px 13px; border-radius: 20px; font-size: 12px; font-weight: 500; cursor: pointer;
   border: 1.5px solid var(--rule); background: var(--surface); color: var(--ink2);
   transition: all 0.15s; font-family: var(--font-body);
 }
@@ -736,7 +735,7 @@ function switchTab(name, btn) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   if (btn) btn.classList.add('active');
   document.getElementById('tab-' + name).classList.add('active');
-  const ac = document.getElementById('appContent'); if (ac) ac.scrollTop = 0;
+  window.scrollTo(0, 0);
 
   if (name === 'discover' && !tabLoaded.discover) { tabLoaded.discover = true; loadPopular(); }
   if (name === 'myseries') renderMySeries();
