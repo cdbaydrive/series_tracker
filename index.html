@@ -583,6 +583,7 @@ let epCache = {};           // id -> { all:[...], ts, ended } (persisté)
 let tvmCache = {};          // id -> { data, ts }   (persisté — TVmaze)
 const EP_KEY  = 'seriestracker-episodes-v1';
 const TVM_KEY = 'seriestracker-tvmaze-v1';
+const WL_KEY  = 'seriestracker-watchlist-v1';   // watchlist déjà calculée, persistée pour affichage instantané
 const EP_TTL_RUNNING = 12 * 3600 * 1000;       // série en cours : 12h
 const EP_TTL_ENDED   = 7 * 24 * 3600 * 1000;   // série terminée : 7 jours
 
@@ -593,6 +594,17 @@ function loadState() {
   try { const raw = localStorage.getItem(DETAILS_KEY); if (raw) detailsCache = JSON.parse(raw); } catch(e) {}
   try { const raw = localStorage.getItem(EP_KEY);  if (raw) epCache  = JSON.parse(raw); } catch(e) {}
   try { const raw = localStorage.getItem(TVM_KEY); if (raw) tvmCache = JSON.parse(raw); } catch(e) {}
+  try {
+    const raw = localStorage.getItem(WL_KEY);
+    if (raw) {
+      const cached = JSON.parse(raw);
+      if (cached && Array.isArray(cached.data)) {
+        watchlistData = cached.data;
+        watchlistCount = watchlistData.length;
+        watchlistBuilt = true; // affichage instantané ; revérifiée en arrière-plan à l'ouverture de l'onglet
+      }
+    }
+  } catch(e) {}
 }
 function saveState() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch(e) {} }
 function persistDetails() {
@@ -605,6 +617,9 @@ function persistEpisodes() {
 }
 function persistTvm() {
   try { localStorage.setItem(TVM_KEY, JSON.stringify(tvmCache)); } catch(e) {}
+}
+function persistWatchlist() {
+  try { localStorage.setItem(WL_KEY, JSON.stringify({ data: watchlistData, ts: Date.now() })); } catch(e) {}
 }
 
 /* ═══════════════════════════════════════════
@@ -1174,11 +1189,24 @@ async function rebuildWatchlist(force) {
     root.innerHTML = '<div class="empty-state"><div class="icon">📺</div><p>Les épisodes diffusés de vos séries apparaîtront ici. Ajoutez d\'abord des séries.</p></div>';
     return;
   }
-  if (watchlistBuilt && !force) { renderWatchlist(); return; }
+
+  if (watchlistBuilt && !force) {
+    // Déjà en mémoire (calculé cette session, ou restauré du cache local à l'ouverture de l'app)
+    // → affichage instantané, sans spinner, sans attendre le réseau.
+    renderWatchlist();
+    refreshWatchlistData(false); // vérifie les différences en arrière-plan, silencieusement
+    return;
+  }
+
   if (force) { epCache = {}; persistEpisodes(); }
-
   root.innerHTML = '<div class="loader-wrap"><div class="spinner"></div><span>Analyse des épisodes diffusés…</span></div>';
+  await refreshWatchlistData(true);
+}
 
+/* Recalcule la watchlist à partir du cache détails/épisodes (TTL 12h / 7j, éventuellement
+   rafraîchi en réseau si expiré) et ne retouche le DOM que si le résultat a changé
+   — ou si forceRender est demandé (premier calcul, ou clic explicite sur "Rafraîchir"). */
+async function refreshWatchlistData(forceRender) {
   const today = new Date(); today.setHours(23,59,59,999);
   const rows = [];
   await pool(S.series, 4, async (s) => {
@@ -1197,11 +1225,16 @@ async function rebuildWatchlist(force) {
     }
   });
   rows.sort((a,b) => new Date(b.air_date) - new Date(a.air_date)); // plus récent en haut
+
+  const changed = JSON.stringify(rows) !== JSON.stringify(watchlistData);
   watchlistData = rows;
   watchlistCount = rows.length;
   watchlistBuilt = true;
+  persistWatchlist();
   updateBadges();
-  renderWatchlist();
+
+  const onWatchlistTab = document.getElementById('tab-watchlist').classList.contains('active');
+  if (onWatchlistTab && (forceRender || changed)) renderWatchlist();
 }
 
 function watchedCount(sid) {
@@ -1631,8 +1664,11 @@ function seasonWatchedCount(sid, season) {
 }
 
 function invalidateWatchlist() {
-  watchlistBuilt = false;          // reconstruction à la prochaine ouverture de l'onglet
-  recomputeWatchlistCount();       // badge à jour sans reconstruire (ne replie pas l'accordéon)
+  // Retire du cache déjà affiché les épisodes désormais marqués vus, sans tout recharger
+  // (watchlistBuilt reste true → prochaine ouverture de l'onglet toujours instantanée).
+  watchlistData = watchlistData.filter(r => !((S.watched[r.sid] || {})[epKey(r.season, r.episode)]));
+  persistWatchlist();
+  recomputeWatchlistCount();       // badge à jour (ne replie pas l'accordéon)
 }
 
 /* ── Courbe de qualité : note moyenne TMDB par saison ── */
