@@ -590,6 +590,7 @@ header {
 .modal-fav-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
 .modal-fav-btn.saved { background: rgba(1,180,228,0.1); color: var(--accent); border-color: rgba(1,180,228,0.4); }
 .chip-stream { background: rgba(52,210,127,0.1); border: 1px solid rgba(52,210,127,0.3); border-radius: 6px; padding: 5px 10px; font-size: 12px; color: var(--stream); font-weight: 500; }
+.chip-stream.wl { font-size: 8.4px; padding: 3px 7px; }
 
 /* ─── SAISONS / ÉPISODES (modal) ─── */
 .season-acc { display: flex; flex-direction: column; gap: 8px; }
@@ -1665,8 +1666,8 @@ function makeWatchlistGroup(g) {
     providerDiv.style.cssText = 'margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px;';
     for (const p of providers) { 
       const c = document.createElement('span'); 
-      c.className = 'chip-stream'; 
-      c.textContent = '📺 ' + p; 
+      c.className = 'chip-stream wl'; 
+      c.textContent = p; 
       providerDiv.appendChild(c); 
     }
     info.appendChild(providerDiv);
