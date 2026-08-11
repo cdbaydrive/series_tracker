@@ -323,6 +323,268 @@ header {
 .cast-photo-ph { width: 56px; height: 56px; border-radius: 50%; background: var(--surface2); display: flex; align-items: center; justify-content: center; font-size: 20px; color: var(--muted); margin: 0 auto 5px; }
 .cast-name { font-size: 10px; font-weight: 500; color: var(--ink); line-height: 1.3; word-break: break-word; }
 .cast-char { font-size: 10px; color: var(--muted); margin-top: 2px; line-height: 1.2; }
+
+/* Make cast photos look tappable */
+.cast-item.clickable { cursor: pointer; }
+.cast-item.clickable .cast-photo, .cast-item.clickable .cast-photo-ph { transition: transform 0.12s, box-shadow 0.12s; }
+.cast-item.clickable:hover .cast-photo, .cast-item.clickable:hover .cast-photo-ph { transform: scale(1.08); box-shadow: 0 3px 10px rgba(0,0,0,0.2); }
+
+/* ─── FILMOGRAPHY OVERLAY (stacked over the series modal) ─── */
+.person-layer {
+  position: absolute;
+  inset: 0;
+  background: var(--bg2);
+  z-index: 20;
+  display: none;
+  flex-direction: column;
+  border-radius: 20px 20px 0 0;
+  overflow: hidden;
+}
+@media (min-width: 600px) { .person-layer { border-radius: 20px; } }
+.person-layer.open { display: flex; }
+.person-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 16px 14px;
+  border-bottom: 1px solid var(--rule);
+  flex-shrink: 0;
+}
+.person-back {
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  border: 1.5px solid var(--rule);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.person-back:hover { background: var(--surface2); }
+.person-photo { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; background: var(--surface2); flex-shrink: 0; cursor: pointer; transition: transform 0.12s, box-shadow 0.12s; }
+.person-photo:hover { transform: scale(1.1); box-shadow: 0 3px 10px rgba(0,0,0,0.3); }
+.person-photo-ph { width: 44px; height: 44px; border-radius: 50%; background: var(--surface2); display:flex;align-items:center;justify-content:center;font-size:18px;color:var(--muted);flex-shrink:0; }
+.person-name { font-family: var(--font-title); font-size: 20px; letter-spacing: 0.4px; color: var(--ink); line-height: 1.1; }
+.person-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.person-scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 16px; flex: 1; }
+
+/* Actor bio block */
+.person-bio-block { margin-bottom: 20px; }
+.person-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.person-fact {
+  background: var(--surface2);
+  border-radius: 20px;
+  padding: 5px 11px;
+  font-size: 11px;
+  color: var(--ink2);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.person-fact strong { color: var(--ink); font-weight: 600; }
+.person-bio {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink2);
+  overflow: hidden;
+  transition: max-height 0.25s ease;
+}
+.person-bio.collapsed {
+  max-height: 60px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent);
+  mask-image: linear-gradient(to bottom, #000 60%, transparent);
+}
+.person-bio-toggle {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 6px 0 0;
+}
+.person-grid-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.person-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 14px;
+}
+.pfilm { cursor: pointer; }
+.pfilm-poster-wrap { position: relative; border-radius: 8px; overflow: hidden; aspect-ratio: 2/3; background: var(--surface2); box-shadow: var(--shadow); }
+.pfilm-poster { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pfilm-poster-ph { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 32px; background: var(--surface2); }
+.pfilm-title { font-size: 12px; font-weight: 500; color: var(--ink); margin-top: 7px; line-height: 1.3; min-height: 32px; display: flex; align-items: flex-start; }
+.pfilm-year { font-size: 10px; color: var(--muted); margin-top: 4px; }
+
+/* ─── PHOTO GALLERY OVERLAY (stacked over the person layer) ─── */
+.photo-gallery-layer {
+  position: absolute;
+  inset: 0;
+  background: var(--bg2);
+  z-index: 30;
+  display: none;
+  flex-direction: column;
+  border-radius: 20px 20px 0 0;
+  overflow: hidden;
+}
+@media (min-width: 600px) { .photo-gallery-layer { border-radius: 20px; } }
+.photo-gallery-layer.open { display: flex; }
+.photo-gallery-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 16px 14px;
+  border-bottom: 1px solid var(--rule);
+  flex-shrink: 0;
+}
+.photo-gallery-back {
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  border: 1.5px solid var(--rule);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.photo-gallery-back:hover { background: var(--surface2); }
+.photo-gallery-title {
+  font-family: var(--font-title);
+  font-size: 18px;
+  letter-spacing: 0.4px;
+  color: var(--ink);
+  line-height: 1.1;
+}
+.photo-gallery-scroll {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px;
+  flex: 1;
+}
+.photo-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+}
+.photo-gallery-item {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  aspect-ratio: 3/4;
+  background: var(--surface2);
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.photo-gallery-item:hover { transform: scale(1.05); }
+.photo-gallery-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.photo-gallery-item-ph {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
+  background: var(--surface2);
+}
+
+/* Full-screen photo viewer */
+.photo-viewer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.95);
+  z-index: 40;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.photo-viewer-overlay.open { display: flex; }
+.photo-viewer-container {
+  max-width: 90vw;
+  max-height: 90vh;
+  position: relative;
+}
+.photo-viewer-img {
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+  border-radius: 15px;
+}
+.photo-viewer-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(0, 0, 0, 0.6);
+  border: none;
+  color: var(--ink);
+  font-size: 28px;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+.photo-viewer-nav:hover { background: rgba(0, 0, 0, 0.8); }
+.photo-viewer-prev { left: -60px; }
+.photo-viewer-next { right: -60px; }
+@media (max-width: 768px) {
+  .photo-viewer-prev { left: 10px; }
+  .photo-viewer-next { right: 10px; }
+}
+.photo-viewer-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(0, 0, 0, 0.6);
+  border: none;
+  color: var(--ink);
+  font-size: 24px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+  z-index: 41;
+}
+.photo-viewer-close:hover { background: rgba(0, 0, 0, 0.8); }
+.photo-viewer-counter {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--ink);
+  padding: 8px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+}
 .modal-close-btn { position: absolute; top: 12px; right: 12px; width: 32px; height: 32px; background: rgba(0,0,0,0.5); backdrop-filter: blur(4px); border: 1px solid var(--rule); border-radius: 50%; color: var(--ink); font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 10; }
 .modal-fav-btn { display: flex; align-items: center; gap: 6px; padding: 11px 18px; border-radius: var(--radius); border: 1.5px solid var(--rule); background: var(--surface2); color: var(--ink2); font-family: var(--font-body); font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s; width: 100%; justify-content: center; margin-top: 20px; }
 .modal-fav-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
@@ -540,6 +802,26 @@ header {
   <div class="modal-sheet" id="modalSheet">
     <button class="modal-close-btn" onclick="closeModal()" aria-label="Fermer"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" style="display:block"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     <div id="modalInner" class="modal-scroll"></div>
+    <div class="person-layer" id="personLayer">
+      <div class="person-header" id="personHeader"></div>
+      <div class="person-scroll" id="personScroll"></div>
+      <div class="photo-gallery-layer" id="photoGalleryLayer">
+        <div class="photo-gallery-header">
+          <button class="photo-gallery-back" onclick="closePhotoGallery()" title="Retour">‹</button>
+          <div class="photo-gallery-title" id="photoGalleryTitle">Photos</div>
+        </div>
+        <div class="photo-gallery-scroll" id="photoGalleryScroll"></div>
+      </div>
+    </div>
+    <div class="photo-viewer-overlay" id="photoViewerOverlay" onclick="handlePhotoViewerClick(event)">
+      <button class="photo-viewer-close" onclick="closePhotoViewer()">✕</button>
+      <div class="photo-viewer-container">
+        <img id="photoViewerImg" class="photo-viewer-img" alt="">
+        <button class="photo-viewer-nav photo-viewer-prev" onclick="prevPhoto()">‹</button>
+        <button class="photo-viewer-nav photo-viewer-next" onclick="nextPhoto()">›</button>
+        <div class="photo-viewer-counter"><span id="photoViewerCounter">1/10</span></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1218,9 +1500,15 @@ async function refreshWatchlistData(forceRender) {
       if (!ep.air_date) continue;
       if (new Date(ep.air_date) > today) continue;     // pas encore diffusé
       if (w[epKey(ep.season, ep.episode)]) continue;    // déjà vu
+      const providers = [];
+      if (d['watch/providers'] && d['watch/providers'].results && d['watch/providers'].results.FR) {
+        const fr = d['watch/providers'].results.FR;
+        if (fr.flatrate) providers.push(...fr.flatrate.map(p => p.provider_name));
+      }
       rows.push({
         sid: s.id, name: s.name || d.name, poster_path: s.poster_path || d.poster_path,
         season: ep.season, episode: ep.episode, epName: ep.name, air_date: ep.air_date, total,
+        providers: providers,
       });
     }
   });
@@ -1322,6 +1610,15 @@ function makeWatchlistGroup(g) {
   const fill = document.createElement('div'); fill.className = 'wl-bar-fill';
   bar.appendChild(fill); prog.appendChild(bar);
   info.appendChild(prog);
+
+  // Providers
+  const providers = [...new Set(g.eps.flatMap(e => e.providers || []))];
+  if (providers.length > 0) {
+    const providerDiv = document.createElement('div'); providerDiv.style.cssText = 'margin-top: 8px; font-size: 11px; color: var(--muted);';
+    providerDiv.innerHTML = '<strong>Disponible sur:</strong> ' + providers.join(', ');
+    info.appendChild(providerDiv);
+  }
+
   head.appendChild(info);
 
   const allBtn = document.createElement('button'); allBtn.className = 'season-toggle'; allBtn.title = 'Tout marquer comme vu'; allBtn.textContent = '✓';
@@ -1629,12 +1926,14 @@ async function openSerieModal(id) {
       content.appendChild(sectionTitle('Têtes d\'affiche'));
       const cr = document.createElement('div'); cr.className = 'cast-row';
       for (const a of cast) {
-        const it = document.createElement('div'); it.className = 'cast-item';
+        const it = document.createElement('div'); it.className = 'cast-item clickable';
         if (a.profile_path) { const im = document.createElement('img'); im.className = 'cast-photo'; im.src = IMG_BASE + '/w185' + a.profile_path; im.alt = ''; im.loading = 'lazy'; it.appendChild(im); }
         else { const ph = document.createElement('div'); ph.className = 'cast-photo-ph'; ph.textContent = '👤'; it.appendChild(ph); }
         const nm = document.createElement('div'); nm.className = 'cast-name'; nm.textContent = a.name;
         const ch = document.createElement('div'); ch.className = 'cast-char'; ch.textContent = a.character || (a.roles && a.roles[0] && a.roles[0].character) || '';
-        it.appendChild(nm); it.appendChild(ch); cr.appendChild(it);
+        it.appendChild(nm); it.appendChild(ch); 
+        it.addEventListener('click', () => openPersonLayer(a.id, a.name, a.profile_path));
+        cr.appendChild(it);
       }
       content.appendChild(cr);
     }
@@ -1923,7 +2222,302 @@ function makeEpRow(sid, ep, onChange) {
 
 function closeModal() { _currentModalId = null; document.getElementById('modalOverlay').classList.remove('open'); document.body.style.overflow = ''; }
 function handleModalClick(e) { if (e.target === document.getElementById('modalOverlay')) closeModal(); }
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (document.getElementById('photoViewerOverlay').classList.contains('open')) {
+      closePhotoViewer();
+    } else if (document.getElementById('photoGalleryLayer').classList.contains('open')) {
+      closePhotoGallery();
+    } else if (document.getElementById('personLayer').classList.contains('open')) {
+      closePersonLayer();
+    } else {
+      closeModal();
+    }
+  }
+  if (e.key === 'ArrowLeft' && document.getElementById('photoViewerOverlay').classList.contains('open')) prevPhoto();
+  if (e.key === 'ArrowRight' && document.getElementById('photoViewerOverlay').classList.contains('open')) nextPhoto();
+});
+
+let _personReqId = 0;
+let _currentPhotoIndex = 0;
+let _photoList = [];
+let _photoGalleryReqId = 0;
+
+async function openPersonLayer(personId, personName, profilePath) {
+  const layer  = document.getElementById('personLayer');
+  const header = document.getElementById('personHeader');
+  const scroll = document.getElementById('personScroll');
+  const reqId  = ++_personReqId;
+
+  // Header
+  header.innerHTML = '';
+  const back = document.createElement('button');
+  back.className = 'person-back';
+  back.textContent = '‹';
+  back.title = 'Retour';
+  back.addEventListener('click', closePersonLayer);
+  header.appendChild(back);
+
+  if (profilePath) {
+    const img = document.createElement('img');
+    img.className = 'person-photo';
+    img.src = IMG_BASE + '/w185' + profilePath; img.alt = '';
+    img.addEventListener('click', () => openPhotoGallery(personId, personName));
+    header.appendChild(img);
+  } else {
+    const ph = document.createElement('div'); ph.className = 'person-photo-ph'; ph.textContent = '👤';
+    header.appendChild(ph);
+  }
+  const titleBlock = document.createElement('div');
+  const nm = document.createElement('div'); nm.className = 'person-name'; nm.textContent = personName;
+  const sub = document.createElement('div'); sub.className = 'person-sub'; sub.textContent = 'Filmographie TV';
+  titleBlock.appendChild(nm); titleBlock.appendChild(sub);
+  header.appendChild(titleBlock);
+
+  scroll.innerHTML = '<div class="loader-wrap"><div class="spinner"></div><span>Chargement…</span></div>';
+  layer.classList.add('open');
+  scroll.scrollTop = 0;
+
+  try {
+    const [details, data] = await Promise.all([
+      tmdb('/person/' + personId),
+      tmdb('/person/' + personId + '/tv_credits'),
+    ]);
+    if (reqId !== _personReqId) return;
+
+    const seen = new Set();
+    let shows = (data.cast || [])
+      .filter(m => m.id && (m.poster_path || m.name))
+      .filter(m => { if (seen.has(m.id)) return false; seen.add(m.id); return true; })
+      .sort((a,b) => {
+        const da = a.first_air_date || '0000';
+        const db = b.first_air_date || '0000';
+        return db.localeCompare(da);
+      });
+
+    const count = shows.length;
+    sub.textContent = count + ' série' + (count > 1 ? 's' : '');
+
+    scroll.innerHTML = '';
+
+    if (!(details.biography || '').trim()) {
+      try {
+        const en = await tmdb('/person/' + personId, { language: 'en-US' });
+        if (reqId !== _personReqId) return;
+        if (en && (en.biography || '').trim()) details.biography = en.biography;
+      } catch(e) {}
+    }
+
+    const bioBlock = buildPersonBio(details);
+    if (bioBlock) scroll.appendChild(bioBlock);
+
+    if (!shows.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.innerHTML = '<div class="icon">📺</div><p>Aucune série trouvée</p>';
+      scroll.appendChild(empty);
+      return;
+    }
+
+    const gridLabel = document.createElement('div');
+    gridLabel.className = 'person-grid-label';
+    gridLabel.textContent = 'Séries';
+    scroll.appendChild(gridLabel);
+
+    const grid = document.createElement('div');
+    grid.className = 'person-grid';
+    for (const m of shows) {
+      const card = document.createElement('div');
+      card.className = 'pfilm';
+
+      const pw = document.createElement('div');
+      pw.className = 'pfilm-poster-wrap';
+      if (m.poster_path) {
+        const img = document.createElement('img');
+        img.className = 'pfilm-poster';
+        img.src = IMG_BASE + '/w185' + m.poster_path; img.alt = ''; img.loading = 'lazy';
+        pw.appendChild(img);
+      } else {
+        const ph = document.createElement('div'); ph.className = 'pfilm-poster-ph'; ph.textContent = '📺';
+        pw.appendChild(ph);
+      }
+      card.appendChild(pw);
+
+      const title = document.createElement('div');
+      title.className = 'pfilm-title';
+      title.textContent = m.name;
+      card.appendChild(title);
+
+      const year = document.createElement('div');
+      year.className = 'pfilm-year';
+      year.textContent = m.first_air_date ? m.first_air_date.substring(0,4) : '';
+      card.appendChild(year);
+
+      grid.appendChild(card);
+    }
+    scroll.appendChild(grid);
+  } catch(e) {
+    console.error('Error loading person data:', e);
+    scroll.innerHTML = '<div class="empty-state"><div class="icon">⚠️</div><p>Erreur de chargement</p></div>';
+  }
+}
+
+function closePersonLayer() {
+  const layer = document.getElementById('personLayer');
+  layer.classList.remove('open');
+}
+
+async function openPhotoGallery(personId, personName) {
+  const gallery = document.getElementById('photoGalleryLayer');
+  const scroll = document.getElementById('photoGalleryScroll');
+  const title = document.getElementById('photoGalleryTitle');
+  const reqId = ++_photoGalleryReqId;
+
+  title.textContent = personName + ' — Photos';
+  scroll.innerHTML = '<div class="loader-wrap"><div class="spinner"></div><span>Chargement des photos…</span></div>';
+  gallery.classList.add('open');
+  scroll.scrollTop = 0;
+
+  try {
+    const data = await tmdb('/person/' + personId + '/images');
+    if (reqId !== _photoGalleryReqId) return;
+
+    _photoList = (data.profiles || [])
+      .filter(p => p.file_path)
+      .sort((a, b) => (b.vote_count || 0) - (a.vote_count || 0)); // plus populaires en haut
+
+    scroll.innerHTML = '';
+
+    if (!_photoList.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.innerHTML = '<div class="icon">📸</div><p>Aucune photo trouvée</p>';
+      scroll.appendChild(empty);
+      return;
+    }
+
+    const grid = document.createElement('div');
+    grid.className = 'photo-gallery-grid';
+
+    for (let i = 0; i < _photoList.length; i++) {
+      const photo = _photoList[i];
+      const item = document.createElement('div');
+      item.className = 'photo-gallery-item';
+
+      const img = document.createElement('img');
+      img.src = IMG_BASE + '/w300' + photo.file_path;
+      img.alt = '';
+      img.loading = 'lazy';
+      item.appendChild(img);
+
+      item.addEventListener('click', () => openPhotoViewer(i));
+      grid.appendChild(item);
+    }
+
+    scroll.appendChild(grid);
+  } catch (e) {
+    console.error('Error loading photos:', e);
+    scroll.innerHTML = '<div class="empty-state"><div class="icon">⚠️</div><p>Erreur de chargement</p></div>';
+  }
+}
+
+function closePhotoGallery() {
+  const gallery = document.getElementById('photoGalleryLayer');
+  gallery.classList.remove('open');
+}
+
+function openPhotoViewer(index) {
+  if (!_photoList.length) return;
+  _currentPhotoIndex = index;
+  updatePhotoViewer();
+  document.getElementById('photoViewerOverlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closePhotoViewer() {
+  document.getElementById('photoViewerOverlay').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function handlePhotoViewerClick(e) {
+  if (e.target === document.getElementById('photoViewerOverlay')) {
+    closePhotoViewer();
+  }
+}
+
+function updatePhotoViewer() {
+  if (!_photoList.length) return;
+  const photo = _photoList[_currentPhotoIndex];
+  const img = document.getElementById('photoViewerImg');
+  img.src = IMG_BASE + '/w500' + photo.file_path;
+  const counter = document.getElementById('photoViewerCounter');
+  counter.textContent = (_currentPhotoIndex + 1) + '/' + _photoList.length;
+}
+
+function prevPhoto() {
+  if (_photoList.length === 0) return;
+  _currentPhotoIndex = (_currentPhotoIndex - 1 + _photoList.length) % _photoList.length;
+  updatePhotoViewer();
+}
+
+function nextPhoto() {
+  if (_photoList.length === 0) return;
+  _currentPhotoIndex = (_currentPhotoIndex + 1) % _photoList.length;
+  updatePhotoViewer();
+}
+
+function buildPersonBio(details) {
+  if (!details) return null;
+  
+  const block = document.createElement('div');
+  block.className = 'person-bio-block';
+
+  const facts = document.createElement('div');
+  facts.className = 'person-facts';
+
+  if (details.birthday) {
+    const birth = new Date(details.birthday);
+    const today = new Date();
+    const age = Math.floor((today - birth) / (365.25 * 24 * 3600 * 1000));
+    const fact = document.createElement('div');
+    fact.className = 'person-fact';
+    fact.innerHTML = '<strong>' + age + ' ans</strong> • ' + formatDate(details.birthday);
+    facts.appendChild(fact);
+  }
+
+  if (details.place_of_birth) {
+    const fact = document.createElement('div');
+    fact.className = 'person-fact';
+    fact.innerHTML = '📍 ' + details.place_of_birth;
+    facts.appendChild(fact);
+  }
+
+  if (facts.children.length > 0) block.appendChild(facts);
+
+  if ((details.biography || '').trim()) {
+    const bio = document.createElement('div');
+    bio.className = 'person-bio collapsed';
+    bio.textContent = details.biography;
+    block.appendChild(bio);
+
+    const btn = document.createElement('button');
+    btn.className = 'person-bio-toggle';
+    btn.textContent = 'Lire plus';
+    btn.addEventListener('click', () => {
+      bio.classList.toggle('collapsed');
+      btn.textContent = bio.classList.contains('collapsed') ? 'Lire plus' : 'Réduire';
+    });
+    block.appendChild(btn);
+  }
+
+  return block.children.length > 0 ? block : null;
+}
+
+function formatDate(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const months = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+  return d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear();
+}
 
 /* ═══════════════════════════════════════════
    ICS (date connue, heure non fournie par TMDB → 21:00 par défaut)
