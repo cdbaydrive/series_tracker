@@ -1503,12 +1503,12 @@ async function refreshWatchlistData(forceRender) {
       const providers = [];
       if (d['watch/providers'] && d['watch/providers'].results && d['watch/providers'].results.FR) {
         const fr = d['watch/providers'].results.FR;
-        if (fr.flatrate) providers.push(...fr.flatrate.map(p => p.provider_name));
+        if (fr.flatrate) providers.push(...fr.flatrate.map(p => cleanProviderName(p.provider_name)));
       }
       rows.push({
         sid: s.id, name: s.name || d.name, poster_path: s.poster_path || d.poster_path,
         season: ep.season, episode: ep.episode, epName: ep.name, air_date: ep.air_date, total,
-        providers: providers,
+        providers: deduplicateProviders(providers),
       });
     }
   });
@@ -1523,6 +1523,53 @@ async function refreshWatchlistData(forceRender) {
 
   const onWatchlistTab = document.getElementById('tab-watchlist').classList.contains('active');
   if (onWatchlistTab && (forceRender || changed)) renderWatchlist();
+}
+
+function cleanProviderName(name) {
+  if (!name) return name;
+  // Simple nettoyage : supprimer les suffixes inutiles
+  return name.split(' with ')[0].trim();
+}
+
+function deduplicateProviders(providers) {
+  // Mapping des services vers leurs noms simplifiés
+  const serviceMap = {
+    'netflix': 'Netflix',
+    'amazon': 'Amazon',
+    'apple': 'Apple TV',
+    'disney': 'Disney+',
+    'hbo': 'HBO Max',
+    'paramount': 'Paramount',
+  };
+  
+  const result = [];
+  const seen = new Set();
+  
+  for (const p of providers) {
+    const lower = p.toLowerCase();
+    
+    // Chercher le service principal
+    let simplified = null;
+    for (const [key, value] of Object.entries(serviceMap)) {
+      if (lower.includes(key)) {
+        simplified = value;
+        break;
+      }
+    }
+    
+    // Si pas reconnu, utiliser le nom original
+    if (!simplified) {
+      simplified = p;
+    }
+    
+    // Ajouter une seule fois
+    if (!seen.has(simplified)) {
+      result.push(simplified);
+      seen.add(simplified);
+    }
+  }
+  
+  return result;
 }
 
 function watchedCount(sid) {
@@ -1614,8 +1661,14 @@ function makeWatchlistGroup(g) {
   // Providers
   const providers = [...new Set(g.eps.flatMap(e => e.providers || []))];
   if (providers.length > 0) {
-    const providerDiv = document.createElement('div'); providerDiv.style.cssText = 'margin-top: 8px; font-size: 11px; color: var(--muted);';
-    providerDiv.innerHTML = '<strong>Disponible sur:</strong> ' + providers.join(', ');
+    const providerDiv = document.createElement('div'); 
+    providerDiv.style.cssText = 'margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px;';
+    for (const p of providers) { 
+      const c = document.createElement('span'); 
+      c.className = 'chip-stream'; 
+      c.textContent = '📺 ' + p; 
+      providerDiv.appendChild(c); 
+    }
     info.appendChild(providerDiv);
   }
 
