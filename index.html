@@ -693,13 +693,66 @@ header {
   .modal-content { padding: 0 14px 28px; }
   .stats-grid { gap: 10px; }
 }
+
+/* ─── PROFILE / PIN / MIGRATE OVERLAYS ─── */
+.auth-overlay {
+  position: fixed; inset: 0; background: #000; z-index: 2000;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.auth-overlay.hidden { display: none; }
+.auth-card {
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 16px;
+  padding: 28px 24px; width: 100%; max-width: 360px; text-align: center;
+}
+.auth-card h2 { font-family: var(--font-title); font-size: 1.6rem; letter-spacing: 0.04em; margin-bottom: 6px; color: var(--ink); }
+.auth-card p { color: var(--muted); font-size: 0.9rem; margin-bottom: 20px; line-height: 1.4; }
+.auth-profiles { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+.auth-profile-btn {
+  background: var(--surface2); border: 1px solid var(--rule); color: var(--ink);
+  padding: 14px 18px; border-radius: 10px; font-size: 1.05rem; font-weight: 600;
+  cursor: pointer; transition: background 0.15s, border-color 0.15s;
+}
+.auth-profile-btn:hover, .auth-profile-btn:focus { background: var(--surface3); border-color: var(--accent); outline: none; }
+.auth-pin-row { display: flex; gap: 8px; justify-content: center; margin: 16px 0 12px; }
+.auth-pin-digit {
+  width: 48px; height: 56px; text-align: center; font-size: 1.5rem; font-weight: 700;
+  background: var(--surface2); border: 2px solid var(--rule); border-radius: 10px;
+  color: var(--ink); outline: none; caret-color: var(--accent);
+}
+.auth-pin-digit:focus { border-color: var(--accent); }
+.auth-error { color: #f87171; font-size: 0.85rem; min-height: 1.2em; margin-bottom: 8px; }
+.auth-submit {
+  width: 100%; background: var(--accent); color: #fff; border: none;
+  padding: 13px; border-radius: 10px; font-size: 1rem; font-weight: 700; cursor: pointer;
+  margin-top: 4px;
+}
+.auth-submit:disabled { opacity: 0.45; cursor: not-allowed; }
+.auth-submit:hover:not(:disabled) { filter: brightness(1.08); }
+.auth-back {
+  background: none; border: none; color: var(--muted); font-size: 0.85rem;
+  margin-top: 14px; cursor: pointer; text-decoration: underline;
+}
+.auth-profile-label { font-size: 0.8rem; color: var(--accent); margin-bottom: 4px; font-weight: 600; }
+.profile-badge {
+  font-size: 0.7rem; font-weight: 600; color: var(--muted);
+  background: var(--surface2); border: 1px solid var(--rule);
+  padding: 3px 8px; border-radius: 20px; margin-left: 8px;
+  vertical-align: middle;
+}
+.migrate-status { font-size: 0.9rem; color: var(--muted); margin: 12px 0; min-height: 1.4em; }
+.migrate-status.ok { color: #34d27f; }
+.migrate-status.err { color: #f87171; }
 </style>
+
+<!-- Firebase SDK (compat, same pattern as Americano) -->
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
 </head>
 <body>
 
 <header>
   <div class="header-top">
-    <div class="logo">SERIES<span>TRACKER</span></div>
+    <div class="logo">SERIES<span>TRACKER</span><span class="profile-badge" id="profile-badge" style="display:none"></span></div>
     <div class="header-actions">
       <button class="btn-icon" onclick="exportData()" title="Exporter">⬆</button>
       <label class="btn-icon" title="Importer" style="cursor:pointer">
@@ -829,6 +882,26 @@ header {
 <!-- BOTTOM NAV -->
 
 
+<!-- PROFILE SELECTOR -->
+<div id="auth-overlay" class="auth-overlay hidden">
+  <div class="auth-card" id="auth-card">
+    <!-- filled by JS -->
+  </div>
+</div>
+
+<!-- MIGRATE OVERLAY (?migrate=1) -->
+<div id="migrate-overlay" class="auth-overlay hidden">
+  <div class="auth-card">
+    <h2>Migration Firebase</h2>
+    <p>Importe un fichier <strong>.json</strong> d’export dans un profil. Les données écrasent le contenu actuel de ce profil sur Firebase.</p>
+    <div class="auth-profiles" id="migrate-profiles"></div>
+    <input type="file" id="migrate-file" accept=".json,application/json" style="width:100%;margin:12px 0;color:var(--ink);font-size:0.9rem;">
+    <div class="migrate-status" id="migrate-status"></div>
+    <button class="auth-submit" id="migrate-btn" onclick="runMigrateImport()" disabled>Importer dans Firebase</button>
+    <button class="auth-back" onclick="closeMigrateOverlay()">Fermer</button>
+  </div>
+</div>
+
 <!-- TOAST -->
 <div class="toast" id="toast"></div>
 
@@ -842,6 +915,8 @@ const IMG_BASE = 'https://image.tmdb.org/t/p';
 const STORE_KEY   = 'seriestracker-v1';
 const DETAILS_KEY = 'seriestracker-details-v1';
 const DETAILS_TTL = 12 * 3600 * 1000; // refresh details après 12h
+const PROFILE_KEY = 'seriestracker-profile';
+const UNLOCK_PREFIX = 'seriestracker-unlocked-';
 
 const STATUS_FR = {
   'Returning Series': 'En cours',
@@ -852,6 +927,51 @@ const STATUS_FR = {
   'Pilot': 'Pilote',
 };
 const STATUS_ACTIVE = ['Returning Series', 'In Production', 'Planned', 'Pilot'];
+
+/* ═══════════════════════════════════════════
+   PROFILES (3 fixes)
+═══════════════════════════════════════════ */
+const PROFILES = [
+  { id: 'cyril',     name: 'Cyril' },
+  { id: 'sebastien', name: 'Sébastien' },
+  { id: 'bernard',   name: 'Bernard' },
+];
+
+/* ═══════════════════════════════════════════
+   FIREBASE
+═══════════════════════════════════════════ */
+const firebaseConfig = {
+  apiKey: "AIzaSyCWWF2O3zZwFyeluZno-ubIaiDXt1VNmIE",
+  authDomain: "series-tracker-cbc41.firebaseapp.com",
+  databaseURL: "https://series-tracker-cbc41-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "series-tracker-cbc41",
+  storageBucket: "series-tracker-cbc41.firebasestorage.app",
+  messagingSenderId: "296177290428",
+  appId: "1:296177290428:web:8c72b6dc1f035c22e594b9"
+};
+
+let firebaseApp = null;
+let firebaseDb = null;
+let currentProfileId = null;   // 'cyril' | 'sebastien' | 'bernard'
+let cloudListener = null;
+let suppressCloudPush = false; // true pendant application d'un snapshot distant
+let authReady = false;         // true une fois le profil validé sur cet appareil
+
+function initFirebase() {
+  try {
+    if (!firebase.apps.length) firebaseApp = firebase.initializeApp(firebaseConfig);
+    else firebaseApp = firebase.app();
+    firebaseDb = firebase.database();
+    return true;
+  } catch (e) {
+    console.error('Firebase init error', e);
+    return false;
+  }
+}
+
+function userRef(profileId) {
+  return firebaseDb.ref('users/' + profileId);
+}
 
 /* ═══════════════════════════════════════════
    STATE  (seul S est synchronisé / exporté)
@@ -870,10 +990,7 @@ const WL_KEY  = 'seriestracker-watchlist-v1';   // watchlist déjà calculée, p
 const EP_TTL_RUNNING = 12 * 3600 * 1000;       // série en cours : 12h
 const EP_TTL_ENDED   = 7 * 24 * 3600 * 1000;   // série terminée : 7 jours
 
-function loadState() {
-  try { const raw = localStorage.getItem(STORE_KEY); if (raw) S = { series: [], watched: {}, ...JSON.parse(raw) }; } catch(e) {}
-  if (!S.watched) S.watched = {};
-  if (!S.series)  S.series  = [];
+function loadLocalCaches() {
   try { const raw = localStorage.getItem(DETAILS_KEY); if (raw) detailsCache = JSON.parse(raw); } catch(e) {}
   try { const raw = localStorage.getItem(EP_KEY);  if (raw) epCache  = JSON.parse(raw); } catch(e) {}
   try { const raw = localStorage.getItem(TVM_KEY); if (raw) tvmCache = JSON.parse(raw); } catch(e) {}
@@ -884,12 +1001,77 @@ function loadState() {
       if (cached && Array.isArray(cached.data)) {
         watchlistData = cached.data;
         watchlistCount = watchlistData.length;
-        watchlistBuilt = true; // affichage instantané ; revérifiée en arrière-plan à l'ouverture de l'onglet
+        watchlistBuilt = true;
       }
     }
   } catch(e) {}
 }
-function saveState() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch(e) {} }
+
+function loadState() {
+  // Fallback local uniquement (avant auth ou hors ligne)
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) S = { series: [], watched: {}, ...JSON.parse(raw) };
+  } catch(e) {}
+  if (!S.watched) S.watched = {};
+  if (!S.series)  S.series  = [];
+  loadLocalCaches();
+}
+
+function saveState() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch(e) {}
+  pushStateToFirebase();
+}
+
+function pushStateToFirebase() {
+  if (!firebaseDb || !currentProfileId || !authReady || suppressCloudPush) return;
+  const payload = {
+    series: S.series,
+    watched: S.watched,
+    updatedAt: Date.now()
+  };
+  // Ne pas écraser le PIN
+  userRef(currentProfileId).update(payload).catch(err => console.warn('Firebase push error', err));
+}
+
+function applyCloudSnapshot(val) {
+  suppressCloudPush = true;
+  if (val && typeof val === 'object') {
+    S.series  = Array.isArray(val.series) ? val.series : [];
+    S.watched = (val.watched && typeof val.watched === 'object') ? val.watched : {};
+  } else {
+    S.series = [];
+    S.watched = {};
+  }
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch(e) {}
+  suppressCloudPush = false;
+
+  // Rafraîchir les vues
+  try {
+    updateBadges();
+    watchlistBuilt = false;
+    const active = document.querySelector('.tab-panel.active');
+    if (active) {
+      if (active.id === 'tab-myseries') renderMySeries();
+      else if (active.id === 'tab-watchlist') rebuildWatchlist(false);
+      else if (active.id === 'tab-stats') renderStats && renderStats();
+    }
+  } catch (e) {}
+}
+
+function startCloudSync(profileId) {
+  if (!firebaseDb) return;
+  if (cloudListener) {
+    userRef(currentProfileId || profileId).off('value', cloudListener);
+    cloudListener = null;
+  }
+  currentProfileId = profileId;
+  cloudListener = userRef(profileId).on('value', snap => {
+    const val = snap.val();
+    // Conserver le PIN localement en mémoire si présent
+    applyCloudSnapshot(val);
+  }, err => console.error('Cloud listener error', err));
+}
 function persistDetails() {
   try { localStorage.setItem(DETAILS_KEY, JSON.stringify(detailsCache)); }
   catch(e) { detailsCache = {}; } // quota dépassé → on abandonne le cache persistant
@@ -2613,7 +2795,7 @@ function downloadIcs(serieName, dateStr, epLabel, airstamp) {
 }
 
 /* ═══════════════════════════════════════════
-   EXPORT / IMPORT  (fusion union pour iCloud)
+   EXPORT / IMPORT  (fusion union — fallback)
 ═══════════════════════════════════════════ */
 function exportData() {
   const payload = { version:1, exported:new Date().toISOString(), series:S.series, watched:S.watched };
@@ -2635,7 +2817,6 @@ function importData(event) {
         if (!s.id || !s.name) continue;
         if (!S.series.some(x => x.id === s.id)) { S.series.push(s); added++; }
       }
-      // union des épisodes vus (vu sur un appareil = vu partout)
       if (data.watched && typeof data.watched === 'object') {
         for (const sid in data.watched) {
           if (!S.watched[sid]) S.watched[sid] = {};
@@ -2654,12 +2835,343 @@ function importData(event) {
 }
 
 /* ═══════════════════════════════════════════
+   AUTH / PROFILE / PIN
+═══════════════════════════════════════════ */
+let _authSelectedProfile = null;
+let _authMode = 'select'; // select | create-pin | enter-pin
+
+function isDeviceUnlocked(profileId) {
+  return localStorage.getItem(UNLOCK_PREFIX + profileId) === '1';
+}
+function markDeviceUnlocked(profileId) {
+  localStorage.setItem(UNLOCK_PREFIX + profileId, '1');
+  localStorage.setItem(PROFILE_KEY, profileId);
+}
+function getSavedProfileId() {
+  const id = localStorage.getItem(PROFILE_KEY);
+  return PROFILES.some(p => p.id === id) ? id : null;
+}
+function profileName(id) {
+  const p = PROFILES.find(x => x.id === id);
+  return p ? p.name : id;
+}
+
+function showAuthOverlay() {
+  document.getElementById('auth-overlay').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+function hideAuthOverlay() {
+  document.getElementById('auth-overlay').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function renderAuthSelect() {
+  _authMode = 'select';
+  _authSelectedProfile = null;
+  const card = document.getElementById('auth-card');
+  card.innerHTML = `
+    <h2>Qui es-tu ?</h2>
+    <p>Choisis ton profil. Le PIN ne sera demandé que sur un nouvel appareil.</p>
+    <div class="auth-profiles">
+      ${PROFILES.map(p => `<button class="auth-profile-btn" onclick="onProfileChosen('${p.id}')">${p.name}</button>`).join('')}
+    </div>`;
+  showAuthOverlay();
+}
+
+async function onProfileChosen(profileId) {
+  _authSelectedProfile = profileId;
+  if (!initFirebase()) {
+    alert('Impossible de se connecter à Firebase.');
+    return;
+  }
+  const card = document.getElementById('auth-card');
+  card.innerHTML = `<h2>${profileName(profileId)}</h2><p>Vérification…</p>`;
+
+  try {
+    const snap = await userRef(profileId).once('value');
+    const val = snap.val();
+    if (val && val.pin) {
+      renderAuthEnterPin(profileId);
+    } else {
+      renderAuthCreatePin(profileId);
+    }
+  } catch (e) {
+    console.error(e);
+    card.innerHTML = `<h2>Erreur</h2><p>Connexion Firebase impossible.</p>
+      <button class="auth-back" onclick="renderAuthSelect()">Retour</button>`;
+  }
+}
+
+function renderAuthCreatePin(profileId) {
+  _authMode = 'create-pin';
+  const card = document.getElementById('auth-card');
+  card.innerHTML = `
+    <div class="auth-profile-label">${profileName(profileId)}</div>
+    <h2>Créer ton code PIN</h2>
+    <p>4 chiffres. Tu en auras besoin uniquement sur un nouvel appareil.</p>
+    <div class="auth-pin-row" id="pin-row"></div>
+    <div class="auth-error" id="auth-error"></div>
+    <button class="auth-submit" id="auth-submit-btn" disabled onclick="submitCreatePin()">Enregistrer le PIN</button>
+    <button class="auth-back" onclick="renderAuthSelect()">Retour</button>`;
+  buildPinInputs(false);
+}
+
+function renderAuthEnterPin(profileId) {
+  _authMode = 'enter-pin';
+  const card = document.getElementById('auth-card');
+  card.innerHTML = `
+    <div class="auth-profile-label">${profileName(profileId)}</div>
+    <h2>Code PIN</h2>
+    <p>Saisis ton code à 4 chiffres pour déverrouiller cet appareil.</p>
+    <div class="auth-pin-row" id="pin-row"></div>
+    <div class="auth-error" id="auth-error"></div>
+    <button class="auth-submit" id="auth-submit-btn" disabled onclick="submitEnterPin()">Valider</button>
+    <button class="auth-back" onclick="renderAuthSelect()">Retour</button>`;
+  buildPinInputs(true);
+}
+
+function buildPinInputs(autoSubmit) {
+  const row = document.getElementById('pin-row');
+  row.innerHTML = '';
+  for (let i = 0; i < 4; i++) {
+    const inp = document.createElement('input');
+    inp.type = 'tel';
+    inp.inputMode = 'numeric';
+    inp.maxLength = 1;
+    inp.className = 'auth-pin-digit';
+    inp.dataset.idx = i;
+    inp.autocomplete = 'off';
+    inp.addEventListener('input', (e) => {
+      const v = e.target.value.replace(/\D/g, '').slice(0, 1);
+      e.target.value = v;
+      if (v && i < 3) row.children[i + 1].focus();
+      updatePinSubmitState();
+      if (autoSubmit && getPinValue().length === 4) submitEnterPin();
+    });
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Backspace' && !e.target.value && i > 0) {
+        row.children[i - 1].focus();
+      }
+    });
+    row.appendChild(inp);
+  }
+  setTimeout(() => row.children[0].focus(), 80);
+}
+
+function getPinValue() {
+  const row = document.getElementById('pin-row');
+  if (!row) return '';
+  return Array.from(row.querySelectorAll('.auth-pin-digit')).map(i => i.value).join('');
+}
+
+function updatePinSubmitState() {
+  const btn = document.getElementById('auth-submit-btn');
+  if (btn) btn.disabled = getPinValue().length !== 4;
+}
+
+async function submitCreatePin() {
+  const pin = getPinValue();
+  if (pin.length !== 4) return;
+  const err = document.getElementById('auth-error');
+  const btn = document.getElementById('auth-submit-btn');
+  btn.disabled = true;
+  err.textContent = '';
+  try {
+    await userRef(_authSelectedProfile).update({ pin: pin, updatedAt: Date.now() });
+    finishAuth(_authSelectedProfile);
+  } catch (e) {
+    console.error(e);
+    err.textContent = 'Erreur d’enregistrement. Réessaie.';
+    btn.disabled = false;
+  }
+}
+
+async function submitEnterPin() {
+  const pin = getPinValue();
+  if (pin.length !== 4) return;
+  const err = document.getElementById('auth-error');
+  const btn = document.getElementById('auth-submit-btn');
+  if (btn) btn.disabled = true;
+  err.textContent = '';
+  try {
+    const snap = await userRef(_authSelectedProfile).once('value');
+    const val = snap.val();
+    if (!val || val.pin !== pin) {
+      err.textContent = 'Code incorrect.';
+      if (btn) btn.disabled = false;
+      // clear digits
+      const row = document.getElementById('pin-row');
+      if (row) {
+        row.querySelectorAll('.auth-pin-digit').forEach(i => { i.value = ''; });
+        row.children[0].focus();
+      }
+      return;
+    }
+    finishAuth(_authSelectedProfile);
+  } catch (e) {
+    console.error(e);
+    err.textContent = 'Erreur de connexion.';
+    if (btn) btn.disabled = false;
+  }
+}
+
+function finishAuth(profileId) {
+  markDeviceUnlocked(profileId);
+  currentProfileId = profileId;
+  authReady = true;
+  hideAuthOverlay();
+  updateProfileBadge();
+  startCloudSync(profileId);
+  // Si le cloud est encore vide et qu'on a des données locales, on les pousse
+  setTimeout(() => {
+    if (S.series.length > 0) pushStateToFirebase();
+  }, 600);
+  showToast('Connecté : ' + profileName(profileId));
+}
+
+function updateProfileBadge() {
+  const badge = document.getElementById('profile-badge');
+  if (!badge) return;
+  if (currentProfileId) {
+    badge.textContent = profileName(currentProfileId);
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+/* ═══════════════════════════════════════════
+   MIGRATE (?migrate=1)
+═══════════════════════════════════════════ */
+let _migrateTargetProfile = null;
+
+function openMigrateOverlay() {
+  const box = document.getElementById('migrate-profiles');
+  box.innerHTML = PROFILES.map(p =>
+    `<button class="auth-profile-btn" id="mig-btn-${p.id}" onclick="selectMigrateProfile('${p.id}')">${p.name}</button>`
+  ).join('');
+  _migrateTargetProfile = null;
+  document.getElementById('migrate-btn').disabled = true;
+  document.getElementById('migrate-status').textContent = '';
+  document.getElementById('migrate-status').className = 'migrate-status';
+  document.getElementById('migrate-overlay').classList.remove('hidden');
+}
+
+function closeMigrateOverlay() {
+  document.getElementById('migrate-overlay').classList.add('hidden');
+}
+
+function selectMigrateProfile(id) {
+  _migrateTargetProfile = id;
+  PROFILES.forEach(p => {
+    const b = document.getElementById('mig-btn-' + p.id);
+    if (b) b.style.borderColor = (p.id === id) ? 'var(--accent)' : '';
+  });
+  document.getElementById('migrate-btn').disabled = !document.getElementById('migrate-file').files.length;
+  document.getElementById('migrate-status').textContent = 'Profil cible : ' + profileName(id);
+}
+
+document.addEventListener('change', (e) => {
+  if (e.target && e.target.id === 'migrate-file') {
+    document.getElementById('migrate-btn').disabled = !(_migrateTargetProfile && e.target.files.length);
+  }
+});
+
+function runMigrateImport() {
+  const fileInput = document.getElementById('migrate-file');
+  const file = fileInput.files[0];
+  const status = document.getElementById('migrate-status');
+  if (!_migrateTargetProfile) {
+    status.textContent = 'Choisis un profil cible.';
+    status.className = 'migrate-status err';
+    return;
+  }
+  if (!file) {
+    status.textContent = 'Choisis un fichier .json.';
+    status.className = 'migrate-status err';
+    return;
+  }
+  if (!initFirebase()) {
+    status.textContent = 'Firebase indisponible.';
+    status.className = 'migrate-status err';
+    return;
+  }
+  status.textContent = 'Lecture du fichier…';
+  status.className = 'migrate-status';
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (!data.series || !Array.isArray(data.series)) throw new Error('Format invalide (series manquant)');
+      const series = data.series.filter(s => s && s.id && s.name);
+      const watched = (data.watched && typeof data.watched === 'object') ? data.watched : {};
+      status.textContent = 'Écriture dans Firebase…';
+      userRef(_migrateTargetProfile).once('value').then(snap => {
+        const existing = snap.val() || {};
+        const payload = {
+          series,
+          watched,
+          updatedAt: Date.now()
+        };
+        // conserver le PIN s'il existe déjà
+        if (existing.pin) payload.pin = existing.pin;
+        return userRef(_migrateTargetProfile).set(payload);
+      }).then(() => {
+        status.textContent = `✅ ${series.length} série(s) importée(s) dans le profil ${profileName(_migrateTargetProfile)}.`;
+        status.className = 'migrate-status ok';
+        fileInput.value = '';
+      }).catch(err => {
+        console.error(err);
+        status.textContent = 'Erreur Firebase : ' + (err.message || err);
+        status.className = 'migrate-status err';
+      });
+    } catch (err) {
+      status.textContent = 'Fichier JSON invalide.';
+      status.className = 'migrate-status err';
+    }
+  };
+  reader.readAsText(file);
+}
+
+/* ═══════════════════════════════════════════
    INIT
 ═══════════════════════════════════════════ */
 loadState();
-updateBadges();
-tabLoaded.discover = true;
-loadPopular();
+loadLocalCaches();
+initFirebase();
+
+(function boot() {
+  const params = new URLSearchParams(window.location.search);
+  const isMigrate = params.get('migrate') === '1';
+
+  if (isMigrate) {
+    openMigrateOverlay();
+  }
+
+  const saved = getSavedProfileId();
+  if (saved && isDeviceUnlocked(saved)) {
+    // Appareil déjà déverrouillé pour ce profil
+    currentProfileId = saved;
+    authReady = true;
+    updateProfileBadge();
+    startCloudSync(saved);
+    updateBadges();
+    tabLoaded.discover = true;
+    loadPopular();
+  } else if (!isMigrate) {
+    // Premier lancement sur cet appareil → sélecteur de profil
+    // (sauf en mode migration, où on ne force pas l'auth)
+    renderAuthSelect();
+    updateBadges();
+    tabLoaded.discover = true;
+    loadPopular();
+  } else {
+    // Mode migrate sans profil encore validé : on charge l'UI de base
+    updateBadges();
+    tabLoaded.discover = true;
+    loadPopular();
+  }
+})();
 </script>
 </body>
 </html>
