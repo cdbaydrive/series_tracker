@@ -1171,9 +1171,20 @@ function startConnectionWatch() {
     }
   });
 }
+let _persistTimer = null;
+function schedulePersist() {
+  clearTimeout(_persistTimer);
+  _persistTimer = setTimeout(flushPersist, 500);
+}
+function flushPersist() {
+  clearTimeout(_persistTimer);
+  persistDetails(); persistEpisodes(); persistTvm(); persistWatchlist();
+}
+window.addEventListener('pagehide', flushPersist);
+
 function persistDetails() {
   try { localStorage.setItem(DETAILS_KEY, JSON.stringify(detailsCache)); }
-  catch(e) { detailsCache = {}; } // quota dépassé → on abandonne le cache persistant
+  catch(e) { /* quota : on garde le cache mémoire, on n'efface plus rien */ }
 }
 function persistEpisodes() {
   try { localStorage.setItem(EP_KEY, JSON.stringify(epCache)); }
@@ -1224,13 +1235,42 @@ async function tmdb(path, params={}) {
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-/* Détails série (avec watch/providers) — caché 12h */
+/* Détails série — caché 12h.
+   watch/providers n'est PAS inclus : payload lourd, inutile pour lister.
+   On ne stocke que les champs utiles (le cache localStorage ne doit pas exploser). */
+function slimDetails(d) {
+  if (!d) return d;
+  return {
+    id: d.id, name: d.name, original_name: d.original_name,
+    poster_path: d.poster_path, backdrop_path: d.backdrop_path,
+    status: d.status, tagline: d.tagline, overview: d.overview,
+    first_air_date: d.first_air_date, last_air_date: d.last_air_date,
+    number_of_seasons: d.number_of_seasons, number_of_episodes: d.number_of_episodes,
+    vote_average: d.vote_average, episode_run_time: d.episode_run_time,
+    genres: d.genres, networks: d.networks,
+    next_episode_to_air: d.next_episode_to_air,
+    last_episode_to_air: d.last_episode_to_air,
+    seasons: (d.seasons || []).map(s => ({
+      season_number: s.season_number, episode_count: s.episode_count,
+      name: s.name, air_date: s.air_date, vote_average: s.vote_average,
+    })),
+    'watch/providers': d['watch/providers'] || null,
+  };
+}
+function cachedDetails(id) {
+  const c = detailsCache[id];
+  return (c && c.data) ? c.data : null;
+}
+function detailsFresh(id) {
+  const c = detailsCache[id];
+  return !!(c && c.data && (Date.now() - c.ts < DETAILS_TTL));
+}
 async function ensureDetails(id, force=false) {
   const c = detailsCache[id];
-  if (!force && c && (Date.now() - c.ts < DETAILS_TTL)) return c.data;
-  const data = await tmdb('/tv/' + id, { append_to_response: 'watch/providers' });
+  if (!force && c && c.data && (Date.now() - c.ts < DETAILS_TTL)) return c.data;
+  const data = slimDetails(await tmdb('/tv/' + id));
   detailsCache[id] = { data, ts: Date.now() };
-  persistDetails();
+  schedulePersist();
   return data;
 }
 
@@ -1247,23 +1287,32 @@ async function pool(items, n, fn) {
 
 /* Liste de tous les épisodes (saisons >= 1) — cache persisté
    TTL : 12h (série en cours) / 7 jours (terminée) */
-async function ensureEpisodes(id, details) {
+function mapSeasonEpisodes(episodes) {
+  return (episodes || []).map(ep => ({
+    season: ep.season_number, episode: ep.episode_number,
+    name: ep.name, air_date: ep.air_date, runtime: ep.runtime,
+  }));
+}
+async function ensureEpisodes(id, details, force=false) {
   const ended = !STATUS_ACTIVE.includes(details.status);
   const ttl = ended ? EP_TTL_ENDED : EP_TTL_RUNNING;
   const c = epCache[id];
-  if (c && c.all && (Date.now() - c.ts < ttl)) return c.all;
+  if (!force && c && c.all && (Date.now() - c.ts < ttl)) return c.all;
   const seasons = (details.seasons || []).filter(s => s.season_number >= 1);
-  const chunks = await pool(seasons, 4, async (s) => {
-    const data = await tmdb('/tv/' + id + '/season/' + s.season_number);
-    return (data.episodes || []).map(ep => ({
-      season: ep.season_number, episode: ep.episode_number,
-      name: ep.name, air_date: ep.air_date, runtime: ep.runtime,
-    }));
-  });
   const all = [];
-  for (const ch of chunks) if (ch) all.push(...ch);
+  // Une requête TMDB peut embarquer jusqu'à 20 saisons (append_to_response)
+  // au lieu d'un appel par saison — le goulot principal de la watchlist.
+  for (let i = 0; i < seasons.length; i += 20) {
+    const slice = seasons.slice(i, i + 20);
+    const append = slice.map(s => 'season/' + s.season_number).join(',');
+    const data = await tmdb('/tv/' + id, { append_to_response: append });
+    for (const s of slice) {
+      const block = data['season/' + s.season_number];
+      if (block && block.episodes) all.push(...mapSeasonEpisodes(block.episodes));
+    }
+  }
   epCache[id] = { all, ts: Date.now(), ended };
-  persistEpisodes();
+  schedulePersist();
   return all;
 }
 
@@ -1296,7 +1345,7 @@ async function ensureTvmaze(id) {
       nextNumber: nextEp ? nextEp.number : null,
     } : null;
     tvmCache[id] = { data, ts: Date.now() };
-    persistTvm();
+    schedulePersist();
     return data;
   } catch(e) {
     return (c && c.data) || null;
@@ -1602,6 +1651,55 @@ async function fetchListPage(path, state, gridId, first) {
 /* ═══════════════════════════════════════════
    MES SÉRIES
 ═══════════════════════════════════════════ */
+let _mySeriesReq = 0;
+
+function classifySeries(list) {
+  const next = [], waiting = [], ended = [];
+  for (let i = 0; i < list.length; i++) {
+    const s = list[i];
+    const d = cachedDetails(s.id);
+    if (!d) { ended.push({ ...s, status: '?', _missing: true }); continue; }
+    const merged = { ...s, ...d };
+    const tv = (tvmCache[s.id] && tvmCache[s.id].data) || null;
+    if (d.next_episode_to_air && d.next_episode_to_air.air_date) next.push(merged);
+    else if (STATUS_ACTIVE.includes(d.status)) {
+      if (tv && tv.status === 'Ended') { merged._cancelled = true; ended.unshift(merged); }
+      else {
+        if (tv && tv.status === 'To Be Determined') merged._tbd = true;
+        waiting.push(merged);
+      }
+    } else ended.push(merged);
+  }
+  next.sort((a,b) => new Date(a.next_episode_to_air.air_date) - new Date(b.next_episode_to_air.air_date));
+  return { next, waiting, ended };
+}
+
+function paintMySeries(root, buckets) {
+  const { next, waiting, ended } = buckets;
+  root.innerHTML = '';
+
+  root.appendChild(subTitle('⏭ Prochain épisode', next.length));
+  if (!next.length) root.appendChild(emptyLine('Aucune diffusion programmée pour le moment.'));
+  else for (const s of next) root.appendChild(makeNextEpRow(s));
+
+  root.appendChild(subTitle('🕓 En attente d\'une date', waiting.length));
+  if (!waiting.length) root.appendChild(emptyLine('Aucune série en attente.'));
+  else {
+    const g = document.createElement('div'); g.className = 'series-grid'; g.id = 'grid-waiting';
+    root.appendChild(g);
+    for (const s of waiting) g.appendChild(makePosterEl(s, { statusChip: { text: s._tbd ? 'Renouvellement ?' : (STATUS_FR[s.status] || 'En cours'), cls: 'wait' } }));
+  }
+
+  root.appendChild(subTitle('✓ Terminées', ended.filter(s => !s._missing).length));
+  const endedKnown = ended.filter(s => !s._missing);
+  if (!endedKnown.length) root.appendChild(emptyLine('Aucune série terminée.'));
+  else {
+    const g = document.createElement('div'); g.className = 'series-grid'; g.id = 'grid-ended';
+    root.appendChild(g);
+    for (const s of endedKnown) g.appendChild(makePosterEl(s, { statusChip: { text: s._cancelled ? 'Annulée' : (STATUS_FR[s.status] || 'Terminée'), cls: 'ended' } }));
+  }
+}
+
 async function renderMySeries() {
   const root = document.getElementById('myseries-content');
   const count = document.getElementById('myseries-count');
@@ -1612,63 +1710,29 @@ async function renderMySeries() {
     return;
   }
 
-  root.innerHTML = '<div class="loader-wrap"><div class="spinner"></div><span>Chargement de vos séries…</span></div>';
+  const req = ++_mySeriesReq;
+  const haveCache = S.series.some(s => cachedDetails(s.id));
+  if (haveCache) paintMySeries(root, classifySeries(S.series));
+  else root.innerHTML = '<div class="loader-wrap"><div class="spinner"></div><span>Chargement de vos séries…</span></div>';
 
-  const next = [], waiting = [], ended = [];
-  const detailed = await pool(S.series, 4, async (s) => ({ s, d: await ensureDetails(s.id) }));
-  for (let i = 0; i < detailed.length; i++) {
-    const r = detailed[i];
-    if (!r || !r.d) { ended.push({ ...S.series[i], status: '?' }); continue; }
-    const merged = { ...r.s, ...r.d };
-    if (r.d.next_episode_to_air && r.d.next_episode_to_air.air_date) next.push(merged);
-    else if (STATUS_ACTIVE.includes(r.d.status)) waiting.push(merged);
-    else ended.push(merged);
+  const stale = S.series.filter(s => !detailsFresh(s.id));
+  if (stale.length) {
+    await pool(stale, 6, async (s) => { await ensureDetails(s.id); });
+    if (req !== _mySeriesReq) return;
+    paintMySeries(root, classifySeries(S.series));
   }
 
-  // TVmaze : statut plus frais que TMDB pour les séries "en attente"
-  // Ended → annulée/terminée ; To Be Determined → renouvellement incertain
-  await pool(waiting.slice(), 4, async (s) => { s._tvm = await ensureTvmaze(s.id); });
-  for (let i = waiting.length - 1; i >= 0; i--) {
-    const tv = waiting[i]._tvm;
-    if (tv && tv.status === 'Ended') {
-      const s = waiting.splice(i, 1)[0];
-      s._cancelled = true;
-      ended.unshift(s);
-    } else if (tv && tv.status === 'To Be Determined') {
-      waiting[i]._tbd = true;
-    }
-  }
-  next.sort((a,b) => new Date(a.next_episode_to_air.air_date) - new Date(b.next_episode_to_air.air_date));
-
-  root.innerHTML = '';
-
-  // ── Section 1 : prochain épisode ──
-  root.appendChild(subTitle('⏭ Prochain épisode', next.length));
-  if (!next.length) {
-    root.appendChild(emptyLine('Aucune diffusion programmée pour le moment.'));
-  } else {
-    for (const s of next) root.appendChild(makeNextEpRow(s));
-  }
-
-  // ── Section 2 : en attente (actives, prochaine date inconnue) ──
-  root.appendChild(subTitle('🕓 En attente d\'une date', waiting.length));
-  if (!waiting.length) {
-    root.appendChild(emptyLine('Aucune série en attente.'));
-  } else {
-    const g = document.createElement('div'); g.className = 'series-grid'; g.id = 'grid-waiting';
-    root.appendChild(g);
-    for (const s of waiting) g.appendChild(makePosterEl(s, { statusChip: { text: s._tbd ? 'Renouvellement ?' : (STATUS_FR[s.status] || 'En cours'), cls: 'wait' } }));
-  }
-
-  // ── Section 3 : terminées ──
-  root.appendChild(subTitle('✓ Terminées', ended.length));
-  if (!ended.length) {
-    root.appendChild(emptyLine('Aucune série terminée.'));
-  } else {
-    const g = document.createElement('div'); g.className = 'series-grid'; g.id = 'grid-ended';
-    root.appendChild(g);
-    for (const s of ended) g.appendChild(makePosterEl(s, { statusChip: { text: s._cancelled ? 'Annulée' : (STATUS_FR[s.status] || 'Terminée'), cls: 'ended' } }));
-  }
+  // TVmaze ne bloque plus l'affichage : on ne l'interroge que pour les séries
+  // en attente dont le statut n'est pas déjà en cache, puis on repeint.
+  const waitingIds = classifySeries(S.series).waiting.map(s => s.id);
+  const needTvm = waitingIds.filter(id => {
+    const c = tvmCache[id];
+    return !(c && (Date.now() - c.ts < DETAILS_TTL));
+  });
+  if (!needTvm.length) return;
+  await pool(needTvm, 4, async (id) => { await ensureTvmaze(id); });
+  if (req !== _mySeriesReq) return;
+  paintMySeries(root, classifySeries(S.series));
 }
 
 function subTitle(text, count) {
@@ -1745,6 +1809,40 @@ let watchlistBuilt = false;
 let watchlistCount = 0;
 let watchlistData = []; // { sid, name, poster_path, season, episode, epName, air_date, watched, total }
 
+function watchlistSignature(rows) {
+  let s = rows.length + ':';
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    s += r.sid + '-' + r.season + '-' + r.episode + '|';
+  }
+  return s;
+}
+
+function rowsFromCaches() {
+  const today = new Date(); today.setHours(23,59,59,999);
+  const rows = [];
+  for (const s of S.series) {
+    const d = cachedDetails(s.id);
+    const c = epCache[s.id];
+    if (!d || !c || !c.all) continue;
+    const total = d.number_of_episodes || c.all.length;
+    const w = S.watched[s.id] || {};
+    const providers = (s._providers) || [];
+    for (const ep of c.all) {
+      if (!ep.air_date) continue;
+      if (new Date(ep.air_date) > today) continue;
+      if (w[epKey(ep.season, ep.episode)]) continue;
+      rows.push({
+        sid: s.id, name: s.name || d.name, poster_path: s.poster_path || d.poster_path,
+        season: ep.season, episode: ep.episode, epName: ep.name, air_date: ep.air_date, total,
+        providers: providers,
+      });
+    }
+  }
+  rows.sort((a,b) => new Date(b.air_date) - new Date(a.air_date));
+  return rows;
+}
+
 async function rebuildWatchlist(force) {
   const root = document.getElementById('watchlist-content');
 
@@ -1754,49 +1852,60 @@ async function rebuildWatchlist(force) {
     return;
   }
 
-  if (watchlistBuilt && !force) {
-    // Déjà en mémoire (calculé cette session, ou restauré du cache local à l'ouverture de l'app)
-    // → affichage instantané, sans spinner, sans attendre le réseau.
-    renderWatchlist();
-    refreshWatchlistData(false); // vérifie les différences en arrière-plan, silencieusement
-    return;
+  // Affichage immédiat : snapshot déjà calculé, sinon recalcul synchrone depuis les caches épisodes.
+  if (!force) {
+    if (!(watchlistBuilt && watchlistData.length)) {
+      const sync = rowsFromCaches();
+      if (sync.length) {
+        watchlistData = sync;
+        watchlistCount = sync.length;
+        watchlistBuilt = true;
+        updateBadges();
+      }
+    }
+    if (watchlistBuilt && watchlistData.length) {
+      renderWatchlist();
+      refreshWatchlistData(false);
+      return;
+    }
   }
 
-  if (force) { epCache = {}; persistEpisodes(); }
-  root.innerHTML = '<div class="loader-wrap"><div class="spinner"></div><span>Analyse des épisodes diffusés…</span></div>';
-  await refreshWatchlistData(true);
+  if (!watchlistData.length) {
+    root.innerHTML = '<div class="loader-wrap"><div class="spinner"></div><span>Analyse des épisodes diffusés…</span></div>';
+  }
+  await refreshWatchlistData(true, force);
 }
 
 /* Recalcule la watchlist à partir du cache détails/épisodes (TTL 12h / 7j, éventuellement
    rafraîchi en réseau si expiré) et ne retouche le DOM que si le résultat a changé
    — ou si forceRender est demandé (premier calcul, ou clic explicite sur "Rafraîchir"). */
-async function refreshWatchlistData(forceRender) {
+async function refreshWatchlistData(forceRender, forceNet) {
   const today = new Date(); today.setHours(23,59,59,999);
   const rows = [];
-  await pool(S.series, 4, async (s) => {
-    const d = await ensureDetails(s.id);
-    const eps = await ensureEpisodes(s.id, d);
+  await pool(S.series, 6, async (s) => {
+    const d = await ensureDetails(s.id, !!forceNet);
+    const eps = await ensureEpisodes(s.id, d, !!forceNet);
     const total = d.number_of_episodes || eps.length;
     const w = S.watched[s.id] || {};
+    const providers = deduplicateProviders(
+      (((d['watch/providers'] || {}).results || {}).FR || {}).flatrate
+        ? d['watch/providers'].results.FR.flatrate.map(p => cleanProviderName(p.provider_name))
+        : (s._providers || [])
+    );
     for (const ep of eps) {
       if (!ep.air_date) continue;
       if (new Date(ep.air_date) > today) continue;     // pas encore diffusé
       if (w[epKey(ep.season, ep.episode)]) continue;    // déjà vu
-      const providers = [];
-      if (d['watch/providers'] && d['watch/providers'].results && d['watch/providers'].results.FR) {
-        const fr = d['watch/providers'].results.FR;
-        if (fr.flatrate) providers.push(...fr.flatrate.map(p => cleanProviderName(p.provider_name)));
-      }
       rows.push({
         sid: s.id, name: s.name || d.name, poster_path: s.poster_path || d.poster_path,
         season: ep.season, episode: ep.episode, epName: ep.name, air_date: ep.air_date, total,
-        providers: deduplicateProviders(providers),
+        providers,
       });
     }
   });
   rows.sort((a,b) => new Date(b.air_date) - new Date(a.air_date)); // plus récent en haut
 
-  const changed = JSON.stringify(rows) !== JSON.stringify(watchlistData);
+  const changed = watchlistSignature(rows) !== watchlistSignature(watchlistData);
   watchlistData = rows;
   watchlistCount = rows.length;
   watchlistBuilt = true;
@@ -1805,6 +1914,39 @@ async function refreshWatchlistData(forceRender) {
 
   const onWatchlistTab = document.getElementById('tab-watchlist').classList.contains('active');
   if (onWatchlistTab && (forceRender || changed)) renderWatchlist();
+
+  // Plateformes : second passage, après l'affichage, pour ne pas ralentir la liste.
+  enrichWatchlistProviders();
+}
+
+let _providerEnrichReq = 0;
+async function enrichWatchlistProviders() {
+  const req = ++_providerEnrichReq;
+  const missing = S.series.filter(s => {
+    const d = cachedDetails(s.id);
+    return d && !d['watch/providers'];
+  });
+  if (!missing.length) return;
+  await pool(missing, 4, async (s) => {
+    try {
+      const data = await tmdb('/tv/' + s.id + '/watch/providers');
+      const d = cachedDetails(s.id);
+      if (d) d['watch/providers'] = data;
+    } catch(e) {}
+  });
+  if (req !== _providerEnrichReq) return;
+  schedulePersist();
+  const rows = watchlistData;
+  let touched = false;
+  for (const r of rows) {
+    const d = cachedDetails(r.sid);
+    const flat = (((d || {})['watch/providers'] || {}).results || {}).FR;
+    if (flat && flat.flatrate && (!r.providers || !r.providers.length)) {
+      r.providers = deduplicateProviders(flat.flatrate.map(p => cleanProviderName(p.provider_name)));
+      touched = true;
+    }
+  }
+  if (touched && document.getElementById('tab-watchlist').classList.contains('active')) renderWatchlist();
 }
 
 function cleanProviderName(name) {
@@ -3089,6 +3231,20 @@ async function bindProfile(profileId) {
   else if (active && active.id === 'tab-watchlist' && typeof rebuildWatchlist === 'function') rebuildWatchlist(false);
   else if (active && active.id === 'tab-stats' && typeof renderStats === 'function') renderStats();
   showToast('Connecté : ' + profileName(profileId));
+  warmLibrary();
+}
+
+/* Précharge détails + épisodes pendant que l'utilisateur est sur Découverte,
+   pour que Watchlist / Mes séries s'ouvrent déjà depuis le cache. */
+function warmLibrary() {
+  if (!S.series.length) return;
+  pool(S.series, 4, async (s) => {
+    const d = await ensureDetails(s.id);
+    const c = epCache[s.id];
+    const ended = !STATUS_ACTIVE.includes(d.status);
+    const ttl = ended ? EP_TTL_ENDED : EP_TTL_RUNNING;
+    if (!c || !c.all || (Date.now() - c.ts >= ttl)) await ensureEpisodes(s.id, d);
+  }).catch(() => {});
 }
 
 function renderUnauthorized(email) {
