@@ -733,12 +733,30 @@ header {
   margin-top: 14px; cursor: pointer; text-decoration: underline;
 }
 .auth-profile-label { font-size: 0.8rem; color: var(--accent); margin-bottom: 4px; font-weight: 600; }
+.auth-email {
+  width: 100%; background: var(--surface2); border: 2px solid var(--rule); color: var(--ink);
+  padding: 12px 14px; border-radius: 10px; font-size: 0.95rem; margin-bottom: 8px; text-align: center; outline: none;
+}
+.auth-email:focus { border-color: var(--accent); }
+.auth-password {
+  width: 100%; background: var(--surface2); border: 2px solid var(--rule); color: var(--ink);
+  padding: 12px 14px; border-radius: 10px; font-size: 1rem; outline: none; text-align: center;
+}
+.auth-password:focus { border-color: var(--accent); }
+.auth-hint { color: var(--muted); font-size: 0.78rem; margin-top: 10px; line-height: 1.35; }
 .profile-badge {
   font-size: 0.7rem; font-weight: 600; color: var(--muted);
   background: var(--surface2); border: 1px solid var(--rule);
   padding: 3px 8px; border-radius: 20px; margin-left: 8px;
-  vertical-align: middle;
+  vertical-align: middle; display: none; align-items: center; gap: 6px;
 }
+.cloud-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: #f5a524; flex: none;
+}
+.cloud-dot.connecting { background: #f5a524; animation: cloud-blink 1s steps(2) infinite; }
+.cloud-dot.online { background: #34d27f; animation: none; }
+.cloud-dot.error { background: #f87171; animation: none; }
+@keyframes cloud-blink { 50% { opacity: 0.2; } }
 .migrate-status { font-size: 0.9rem; color: var(--muted); margin: 12px 0; min-height: 1.4em; }
 .migrate-status.ok { color: #34d27f; }
 .migrate-status.err { color: #f87171; }
@@ -746,14 +764,16 @@ header {
 
 <!-- Firebase SDK (compat, same pattern as Americano) -->
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
 </head>
 <body>
 
 <header>
   <div class="header-top">
-    <div class="logo">SERIES<span>TRACKER</span><span class="profile-badge" id="profile-badge" style="display:none"></span></div>
+    <div class="logo">SERIES<span>TRACKER</span><span class="profile-badge" id="profile-badge"><span class="cloud-dot connecting" id="cloud-dot"></span><span id="profile-badge-name"></span></span></div>
     <div class="header-actions">
+      <button class="btn-icon" id="btn-logout" onclick="submitAuthLogout()" title="Se déconnecter" style="display:none">⎋</button>
       <button class="btn-icon" onclick="exportData()" title="Exporter">⬆</button>
       <label class="btn-icon" title="Importer" style="cursor:pointer">
         ⬇<input type="file" accept=".json" style="display:none" onchange="importData(event)">
@@ -893,7 +913,7 @@ header {
 <div id="migrate-overlay" class="auth-overlay hidden">
   <div class="auth-card">
     <h2>Migration Firebase</h2>
-    <p>Importe un fichier <strong>.json</strong> d’export dans un profil. Les données écrasent le contenu actuel de ce profil sur Firebase.</p>
+    <p>Importe un fichier <strong>.json</strong> dans le profil <strong>connecté</strong>. Les séries et le vu de ce profil sont remplacés. Le champ PIN n’est plus écrit.</p>
     <div class="auth-profiles" id="migrate-profiles"></div>
     <input type="file" id="migrate-file" accept=".json,application/json" style="width:100%;margin:12px 0;color:var(--ink);font-size:0.9rem;">
     <div class="migrate-status" id="migrate-status"></div>
@@ -915,9 +935,6 @@ const IMG_BASE = 'https://image.tmdb.org/t/p';
 const STORE_KEY   = 'seriestracker-v1';
 const DETAILS_KEY = 'seriestracker-details-v1';
 const DETAILS_TTL = 12 * 3600 * 1000; // refresh details après 12h
-const PROFILE_KEY = 'seriestracker-profile';
-const UNLOCK_PREFIX = 'seriestracker-unlocked-';
-
 const STATUS_FR = {
   'Returning Series': 'En cours',
   'Ended': 'Terminée',
@@ -931,11 +948,13 @@ const STATUS_ACTIVE = ['Returning Series', 'In Production', 'Planned', 'Pilot'];
 /* ═══════════════════════════════════════════
    PROFILES (3 fixes)
 ═══════════════════════════════════════════ */
+/* Prénoms seulement. L'email vit dans Firebase Authentication, pas dans ce fichier. */
 const PROFILES = [
   { id: 'cyril',     name: 'Cyril' },
   { id: 'sebastien', name: 'Sébastien' },
   { id: 'bernard',   name: 'Bernard' },
 ];
+const EMAIL_PREFIX = 'seriestracker-email-';
 
 /* ═══════════════════════════════════════════
    FIREBASE
@@ -952,16 +971,31 @@ const firebaseConfig = {
 
 let firebaseApp = null;
 let firebaseDb = null;
-let currentProfileId = null;   // 'cyril' | 'sebastien' | 'bernard'
+let firebaseAuth = null;
+let currentAuthUser = null;
+let currentProfileId = null;   // 'cyril' | 'sebastien' | 'bernard' — résolu via /access/{uid}
 let cloudListener = null;
+let connListener = null;
 let suppressCloudPush = false; // true pendant application d'un snapshot distant
-let authReady = false;         // true une fois le profil validé sur cet appareil
+let authReady = false;         // true une fois le profil Auth résolu
+let stateUpdatedAt = 0;        // ms — horodatage de l'état local
+let cloudDirty = false;        // true = local plus récent, pas encore confirmé cloud
+let cloudLink = 'connecting';  // connecting | online | error
+let authListenerStarted = false;
+let authPersistenceSet = false;
 
 function initFirebase() {
   try {
     if (!firebase.apps.length) firebaseApp = firebase.initializeApp(firebaseConfig);
     else firebaseApp = firebase.app();
     firebaseDb = firebase.database();
+    firebaseAuth = firebase.auth();
+    if (!authPersistenceSet) {
+      authPersistenceSet = true;
+      firebaseAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(err => {
+        console.warn('Auth persistence', err);
+      });
+    }
     return true;
   } catch (e) {
     console.error('Firebase init error', e);
@@ -995,7 +1029,7 @@ function loadLocalCaches() {
   try { const raw = localStorage.getItem(EP_KEY);  if (raw) epCache  = JSON.parse(raw); } catch(e) {}
   try { const raw = localStorage.getItem(TVM_KEY); if (raw) tvmCache = JSON.parse(raw); } catch(e) {}
   try {
-    const raw = localStorage.getItem(WL_KEY);
+    const raw = localStorage.getItem(profileWlKey() || WL_KEY);
     if (raw) {
       const cached = JSON.parse(raw);
       if (cached && Array.isArray(cached.data)) {
@@ -1007,19 +1041,38 @@ function loadLocalCaches() {
   } catch(e) {}
 }
 
+function profileStoreKey() {
+  return currentProfileId ? (STORE_KEY + '-' + currentProfileId) : null;
+}
+function profileWlKey() {
+  return currentProfileId ? (WL_KEY + '-' + currentProfileId) : null;
+}
+
 function loadState() {
-  // Fallback local uniquement (avant auth ou hors ligne)
+  // Fallback local du profil courant (avant le snapshot cloud, ou hors ligne)
+  S = { series: [], watched: {} };
+  stateUpdatedAt = 0;
+  const key = profileStoreKey();
+  if (!key) return;
   try {
-    const raw = localStorage.getItem(STORE_KEY);
+    const raw = localStorage.getItem(key);
     if (raw) S = { series: [], watched: {}, ...JSON.parse(raw) };
   } catch(e) {}
   if (!S.watched) S.watched = {};
   if (!S.series)  S.series  = [];
-  loadLocalCaches();
+  stateUpdatedAt = S.updatedAt || 0;
+}
+
+function writeLocalState() {
+  S.updatedAt = stateUpdatedAt || 0;
+  const key = profileStoreKey();
+  if (key) { try { localStorage.setItem(key, JSON.stringify(S)); } catch(e) {} }
 }
 
 function saveState() {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch(e) {}
+  stateUpdatedAt = Date.now();
+  cloudDirty = true;
+  writeLocalState();
   pushStateToFirebase();
 }
 
@@ -1028,10 +1081,17 @@ function pushStateToFirebase() {
   const payload = {
     series: S.series,
     watched: S.watched,
-    updatedAt: Date.now()
+    updatedAt: stateUpdatedAt || Date.now()
   };
-  // Ne pas écraser le PIN
-  userRef(currentProfileId).update(payload).catch(err => console.warn('Firebase push error', err));
+  userRef(currentProfileId).update(payload).then(() => {
+    cloudDirty = false;
+    if (cloudLink !== 'error') setCloudStatus('online', 'Connecté · synchronisé');
+  }).catch(err => {
+    console.warn('Firebase push error', err);
+    cloudDirty = true;
+    const denied = err && (err.code === 'PERMISSION_DENIED' || /permission/i.test(err.message || ''));
+    setCloudStatus(denied ? 'error' : 'connecting', denied ? 'Sync refusée — vérifie les règles' : 'Hors ligne · envoi en attente');
+  });
 }
 
 function applyCloudSnapshot(val) {
@@ -1039,11 +1099,14 @@ function applyCloudSnapshot(val) {
   if (val && typeof val === 'object') {
     S.series  = Array.isArray(val.series) ? val.series : [];
     S.watched = (val.watched && typeof val.watched === 'object') ? val.watched : {};
+    stateUpdatedAt = val.updatedAt || 0;
   } else {
     S.series = [];
     S.watched = {};
+    stateUpdatedAt = 0;
   }
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch(e) {}
+  cloudDirty = false;
+  writeLocalState();
   suppressCloudPush = false;
 
   // Rafraîchir les vues
@@ -1059,6 +1122,24 @@ function applyCloudSnapshot(val) {
   } catch (e) {}
 }
 
+function hasUserData(series, watched) {
+  return (Array.isArray(series) && series.length > 0) || (watched && typeof watched === 'object' && Object.keys(watched).length > 0);
+}
+
+/* Le plus récent gagne. Égalité : le cloud gagne, sauf s'il est vide et que le local a des données. */
+function reconcileWithCloud(val) {
+  const localAt = stateUpdatedAt || 0;
+  const cloudAt = (val && val.updatedAt) || 0;
+  const localHas = hasUserData(S.series, S.watched);
+  const cloudHas = !!(val && hasUserData(val.series, val.watched));
+  if (localHas && (localAt > cloudAt || (!cloudHas && localAt >= cloudAt))) {
+    cloudDirty = true;
+    pushStateToFirebase();
+    return;
+  }
+  applyCloudSnapshot(val);
+}
+
 function startCloudSync(profileId) {
   if (!firebaseDb) return;
   if (cloudListener) {
@@ -1067,10 +1148,28 @@ function startCloudSync(profileId) {
   }
   currentProfileId = profileId;
   cloudListener = userRef(profileId).on('value', snap => {
-    const val = snap.val();
-    // Conserver le PIN localement en mémoire si présent
-    applyCloudSnapshot(val);
-  }, err => console.error('Cloud listener error', err));
+    reconcileWithCloud(snap.val());
+    if (cloudLink !== 'error') setCloudStatus('online', 'Connecté au cloud');
+  }, err => {
+    console.error('Cloud listener error', err);
+    setCloudStatus('error', 'Problème de lecture cloud');
+  });
+}
+
+function startConnectionWatch() {
+  if (!firebaseDb || connListener) return;
+  connListener = firebaseDb.ref('.info/connected').on('value', snap => {
+    const on = snap.val() === true;
+    if (!currentProfileId) return;
+    if (on) {
+      if (cloudLink !== 'error') setCloudStatus('online', 'Connecté au cloud');
+      if (cloudDirty) {
+        userRef(currentProfileId).once('value').then(s => reconcileWithCloud(s.val())).catch(() => {});
+      }
+    } else {
+      setCloudStatus('connecting', 'Connexion au cloud…');
+    }
+  });
 }
 function persistDetails() {
   try { localStorage.setItem(DETAILS_KEY, JSON.stringify(detailsCache)); }
@@ -1084,7 +1183,7 @@ function persistTvm() {
   try { localStorage.setItem(TVM_KEY, JSON.stringify(tvmCache)); } catch(e) {}
 }
 function persistWatchlist() {
-  try { localStorage.setItem(WL_KEY, JSON.stringify({ data: watchlistData, ts: Date.now() })); } catch(e) {}
+  try { localStorage.setItem(profileWlKey() || WL_KEY, JSON.stringify({ data: watchlistData, ts: Date.now() })); } catch(e) {}
 }
 
 /* ═══════════════════════════════════════════
@@ -2835,25 +2934,26 @@ function importData(event) {
 }
 
 /* ═══════════════════════════════════════════
-   AUTH / PROFILE / PIN
+   AUTH  (Firebase Authentication — 3 comptes)
+   Session LOCAL : mot de passe une fois par appareil.
+   Le profil données est résolu via /access/{uid}.profileId
 ═══════════════════════════════════════════ */
 let _authSelectedProfile = null;
-let _authMode = 'select'; // select | create-pin | enter-pin
 
-function isDeviceUnlocked(profileId) {
-  return localStorage.getItem(UNLOCK_PREFIX + profileId) === '1';
-}
-function markDeviceUnlocked(profileId) {
-  localStorage.setItem(UNLOCK_PREFIX + profileId, '1');
-  localStorage.setItem(PROFILE_KEY, profileId);
-}
-function getSavedProfileId() {
-  const id = localStorage.getItem(PROFILE_KEY);
-  return PROFILES.some(p => p.id === id) ? id : null;
+function profileById(id) {
+  return PROFILES.find(p => p.id === id) || null;
 }
 function profileName(id) {
-  const p = PROFILES.find(x => x.id === id);
+  const p = profileById(id);
   return p ? p.name : id;
+}
+function authErrorMessage(err) {
+  const code = err && err.code ? err.code : '';
+  if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') return 'Mot de passe incorrect.';
+  if (code === 'auth/too-many-requests') return 'Trop de tentatives. Réessaie plus tard.';
+  if (code === 'auth/invalid-email') return 'Email invalide.';
+  if (code === 'auth/network-request-failed') return 'Pas de réseau.';
+  return (err && err.message) ? err.message : 'Connexion impossible.';
 }
 
 function showAuthOverlay() {
@@ -2866,190 +2966,202 @@ function hideAuthOverlay() {
 }
 
 function renderAuthSelect() {
-  _authMode = 'select';
   _authSelectedProfile = null;
   const card = document.getElementById('auth-card');
   card.innerHTML = `
     <h2>Qui es-tu ?</h2>
-    <p>Choisis ton profil. Le PIN ne sera demandé que sur un nouvel appareil.</p>
+    <p>Choisis ton profil. Le mot de passe n’est demandé qu’une fois par appareil.</p>
     <div class="auth-profiles">
       ${PROFILES.map(p => `<button class="auth-profile-btn" onclick="onProfileChosen('${p.id}')">${p.name}</button>`).join('')}
-    </div>`;
+    </div>
+    <p class="auth-hint">Session conservée sur cet appareil. Pour changer de personne : ⎋ puis l’autre prénom.</p>`;
   showAuthOverlay();
 }
 
-async function onProfileChosen(profileId) {
+function onProfileChosen(profileId) {
+  const p = profileById(profileId);
+  if (!p) return;
   _authSelectedProfile = profileId;
-  if (!initFirebase()) {
-    alert('Impossible de se connecter à Firebase.');
-    return;
-  }
-  const card = document.getElementById('auth-card');
-  card.innerHTML = `<h2>${profileName(profileId)}</h2><p>Vérification…</p>`;
-
-  try {
-    const snap = await userRef(profileId).once('value');
-    const val = snap.val();
-    if (val && val.pin) {
-      renderAuthEnterPin(profileId);
-    } else {
-      renderAuthCreatePin(profileId);
-    }
-  } catch (e) {
-    console.error(e);
-    card.innerHTML = `<h2>Erreur</h2><p>Connexion Firebase impossible.</p>
-      <button class="auth-back" onclick="renderAuthSelect()">Retour</button>`;
-  }
-}
-
-function renderAuthCreatePin(profileId) {
-  _authMode = 'create-pin';
+  const remembered = localStorage.getItem(EMAIL_PREFIX + profileId) || '';
   const card = document.getElementById('auth-card');
   card.innerHTML = `
-    <div class="auth-profile-label">${profileName(profileId)}</div>
-    <h2>Créer ton code PIN</h2>
-    <p>4 chiffres. Tu en auras besoin uniquement sur un nouvel appareil.</p>
-    <div class="auth-pin-row" id="pin-row"></div>
+    <div class="auth-profile-label">${p.name}</div>
+    <h2>Connexion</h2>
+    <p>Email du compte Firebase Auth. Une fois validé, cet appareil reste connecté.</p>
+    <input class="auth-email" id="auth-email" type="email" inputmode="email" autocomplete="username" placeholder="Email" value="${remembered}" aria-label="Email">
+    <input class="auth-password" id="auth-password" type="password" placeholder="Mot de passe" autocomplete="current-password">
     <div class="auth-error" id="auth-error"></div>
-    <button class="auth-submit" id="auth-submit-btn" disabled onclick="submitCreatePin()">Enregistrer le PIN</button>
+    <button class="auth-submit" id="auth-submit-btn" onclick="submitAuthLogin()">Se connecter</button>
     <button class="auth-back" onclick="renderAuthSelect()">Retour</button>`;
-  buildPinInputs(false);
+  const emailEl = document.getElementById('auth-email');
+  const passEl = document.getElementById('auth-password');
+  passEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuthLogin(); });
+  emailEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') passEl.focus(); });
+  setTimeout(() => (remembered ? passEl : emailEl).focus(), 60);
 }
 
-function renderAuthEnterPin(profileId) {
-  _authMode = 'enter-pin';
-  const card = document.getElementById('auth-card');
-  card.innerHTML = `
-    <div class="auth-profile-label">${profileName(profileId)}</div>
-    <h2>Code PIN</h2>
-    <p>Saisis ton code à 4 chiffres pour déverrouiller cet appareil.</p>
-    <div class="auth-pin-row" id="pin-row"></div>
-    <div class="auth-error" id="auth-error"></div>
-    <button class="auth-submit" id="auth-submit-btn" disabled onclick="submitEnterPin()">Valider</button>
-    <button class="auth-back" onclick="renderAuthSelect()">Retour</button>`;
-  buildPinInputs(true);
-}
-
-function buildPinInputs(autoSubmit) {
-  const row = document.getElementById('pin-row');
-  row.innerHTML = '';
-  for (let i = 0; i < 4; i++) {
-    const inp = document.createElement('input');
-    inp.type = 'tel';
-    inp.inputMode = 'numeric';
-    inp.maxLength = 1;
-    inp.className = 'auth-pin-digit';
-    inp.dataset.idx = i;
-    inp.autocomplete = 'off';
-    inp.addEventListener('input', (e) => {
-      const v = e.target.value.replace(/\D/g, '').slice(0, 1);
-      e.target.value = v;
-      if (v && i < 3) row.children[i + 1].focus();
-      updatePinSubmitState();
-      if (autoSubmit && getPinValue().length === 4) submitEnterPin();
-    });
-    inp.addEventListener('keydown', (e) => {
-      if (e.key === 'Backspace' && !e.target.value && i > 0) {
-        row.children[i - 1].focus();
-      }
-    });
-    row.appendChild(inp);
-  }
-  setTimeout(() => row.children[0].focus(), 80);
-}
-
-function getPinValue() {
-  const row = document.getElementById('pin-row');
-  if (!row) return '';
-  return Array.from(row.querySelectorAll('.auth-pin-digit')).map(i => i.value).join('');
-}
-
-function updatePinSubmitState() {
+function submitAuthLogin() {
+  const profileId = _authSelectedProfile;
+  const emailEl = document.getElementById('auth-email');
+  const passEl = document.getElementById('auth-password');
+  const errEl = document.getElementById('auth-error');
   const btn = document.getElementById('auth-submit-btn');
-  if (btn) btn.disabled = getPinValue().length !== 4;
-}
-
-async function submitCreatePin() {
-  const pin = getPinValue();
-  if (pin.length !== 4) return;
-  const err = document.getElementById('auth-error');
-  const btn = document.getElementById('auth-submit-btn');
-  btn.disabled = true;
-  err.textContent = '';
-  try {
-    await userRef(_authSelectedProfile).update({ pin: pin, updatedAt: Date.now() });
-    finishAuth(_authSelectedProfile);
-  } catch (e) {
-    console.error(e);
-    err.textContent = 'Erreur d’enregistrement. Réessaie.';
-    btn.disabled = false;
-  }
-}
-
-async function submitEnterPin() {
-  const pin = getPinValue();
-  if (pin.length !== 4) return;
-  const err = document.getElementById('auth-error');
-  const btn = document.getElementById('auth-submit-btn');
+  if (!profileId || !emailEl || !passEl) return;
+  const email = emailEl.value.trim();
+  const password = passEl.value;
+  if (!email) { if (errEl) errEl.textContent = 'Email manquant.'; return; }
+  if (!password) { if (errEl) errEl.textContent = 'Mot de passe manquant.'; return; }
+  if (!initFirebase() || !firebaseAuth) { if (errEl) errEl.textContent = 'Firebase Auth indisponible.'; return; }
   if (btn) btn.disabled = true;
-  err.textContent = '';
-  try {
-    const snap = await userRef(_authSelectedProfile).once('value');
-    const val = snap.val();
-    if (!val || val.pin !== pin) {
-      err.textContent = 'Code incorrect.';
-      if (btn) btn.disabled = false;
-      // clear digits
-      const row = document.getElementById('pin-row');
-      if (row) {
-        row.querySelectorAll('.auth-pin-digit').forEach(i => { i.value = ''; });
-        row.children[0].focus();
-      }
-      return;
-    }
-    finishAuth(_authSelectedProfile);
-  } catch (e) {
-    console.error(e);
-    err.textContent = 'Erreur de connexion.';
+  if (errEl) errEl.textContent = '';
+  firebaseAuth.signInWithEmailAndPassword(email, password).then(() => {
+    try { localStorage.setItem(EMAIL_PREFIX + profileId, email); } catch (_) {}
+  }).catch(err => {
+    if (errEl) errEl.textContent = authErrorMessage(err);
     if (btn) btn.disabled = false;
-  }
+  });
 }
 
-function finishAuth(profileId) {
-  markDeviceUnlocked(profileId);
+function submitAuthLogout() {
+  if (!firebaseAuth) return;
+  firebaseAuth.signOut().catch(err => console.warn('Sign out', err));
+}
+
+function stopCloud() {
+  if (firebaseDb && cloudListener && currentProfileId) {
+    try { userRef(currentProfileId).off('value', cloudListener); } catch (_) {}
+  }
+  cloudListener = null;
+}
+
+function resetSessionUi() {
+  stopCloud();
+  currentProfileId = null;
+  authReady = false;
+  stateUpdatedAt = 0;
+  cloudDirty = false;
+  cloudLink = 'connecting';
+  S = { series: [], watched: {} };
+  watchlistBuilt = false;
+  watchlistData = [];
+  watchlistCount = 0;
+  updateProfileBadge();
+  updateBadges();
+  try {
+    const my = document.getElementById('tab-myseries');
+    if (my) my.innerHTML = '';
+    const wl = document.getElementById('tab-watchlist');
+    if (wl) wl.innerHTML = '';
+  } catch (_) {}
+}
+
+async function resolveAccess(uid) {
+  const snap = await firebaseDb.ref('access/' + uid).once('value');
+  const val = snap.val();
+  if (!val) return null;
+  if (typeof val === 'string') return val;
+  return val.profileId || null;
+}
+
+async function bindProfile(profileId) {
+  stopCloud();
   currentProfileId = profileId;
   authReady = true;
-  hideAuthOverlay();
+  watchlistBuilt = false;
+  watchlistData = [];
+  loadState();
+  loadLocalCaches();
+  setCloudStatus('connecting', 'Connexion au cloud…');
   updateProfileBadge();
+  hideAuthOverlay();
+  startConnectionWatch();
+  try {
+    const snap = await userRef(profileId).once('value');
+    reconcileWithCloud(snap.val());
+  } catch (e) {
+    console.warn('bindProfile', e);
+    setCloudStatus('error', 'Lecture cloud impossible');
+  }
   startCloudSync(profileId);
-  // Si le cloud est encore vide et qu'on a des données locales, on les pousse
-  setTimeout(() => {
-    if (S.series.length > 0) pushStateToFirebase();
-  }, 600);
+  updateBadges();
+  const active = document.querySelector('.tab-panel.active');
+  if (active && active.id === 'tab-myseries' && typeof renderMySeries === 'function') renderMySeries();
+  else if (active && active.id === 'tab-watchlist' && typeof rebuildWatchlist === 'function') rebuildWatchlist(false);
+  else if (active && active.id === 'tab-stats' && typeof renderStats === 'function') renderStats();
   showToast('Connecté : ' + profileName(profileId));
+}
+
+function renderUnauthorized(email) {
+  const card = document.getElementById('auth-card');
+  card.innerHTML = `
+    <h2>Compte non autorisé</h2>
+    <p>${email || 'Cet utilisateur'} n’a pas d’entrée <strong>access/{uid}</strong> dans la base.</p>
+    <button class="auth-submit" onclick="submitAuthLogout()">Se déconnecter</button>`;
+  showAuthOverlay();
+}
+
+function startAuthListener() {
+  if (authListenerStarted) return;
+  if (!initFirebase() || !firebaseAuth) return;
+  authListenerStarted = true;
+  firebaseAuth.onAuthStateChanged(async (user) => {
+    currentAuthUser = user || null;
+    if (!user) {
+      resetSessionUi();
+      renderAuthSelect();
+      return;
+    }
+    try {
+      const profileId = await resolveAccess(user.uid);
+      if (!currentAuthUser || currentAuthUser.uid !== user.uid) return;
+      if (!profileId || !profileById(profileId)) {
+        authReady = false;
+        renderUnauthorized(user.email);
+        return;
+      }
+      await bindProfile(profileId);
+    } catch (e) {
+      console.error(e);
+      const card = document.getElementById('auth-card');
+      card.innerHTML = `<h2>Erreur</h2><p>Lecture du profil impossible. Vérifie les règles Firebase.</p>
+        <button class="auth-submit" onclick="submitAuthLogout()">Se déconnecter</button>`;
+      showAuthOverlay();
+    }
+  });
+}
+
+function setCloudStatus(state, title) {
+  cloudLink = state || 'connecting';
+  const dot = document.getElementById('cloud-dot');
+  if (!dot) return;
+  dot.className = 'cloud-dot ' + cloudLink;
+  const badge = document.getElementById('profile-badge');
+  if (badge && title) badge.title = title;
 }
 
 function updateProfileBadge() {
   const badge = document.getElementById('profile-badge');
+  const nameEl = document.getElementById('profile-badge-name');
+  const logoutBtn = document.getElementById('btn-logout');
+  if (logoutBtn) logoutBtn.style.display = currentProfileId ? '' : 'none';
   if (!badge) return;
   if (currentProfileId) {
-    badge.textContent = profileName(currentProfileId);
-    badge.style.display = '';
+    if (nameEl) nameEl.textContent = profileName(currentProfileId);
+    badge.style.display = 'inline-flex';
+    setCloudStatus(cloudLink, badge.title || 'Connexion au cloud…');
   } else {
     badge.style.display = 'none';
   }
 }
 
 /* ═══════════════════════════════════════════
-   MIGRATE (?migrate=1)
+   MIGRATE (?migrate=1) — uniquement le profil connecté
 ═══════════════════════════════════════════ */
 let _migrateTargetProfile = null;
 
 function openMigrateOverlay() {
   const box = document.getElementById('migrate-profiles');
-  box.innerHTML = PROFILES.map(p =>
-    `<button class="auth-profile-btn" id="mig-btn-${p.id}" onclick="selectMigrateProfile('${p.id}')">${p.name}</button>`
-  ).join('');
+  box.innerHTML = '<p class="auth-hint">Connecte-toi d’abord. L’import écrase les séries du profil de la session.</p>';
   _migrateTargetProfile = null;
   document.getElementById('migrate-btn').disabled = true;
   document.getElementById('migrate-status').textContent = '';
@@ -3081,11 +3193,17 @@ function runMigrateImport() {
   const fileInput = document.getElementById('migrate-file');
   const file = fileInput.files[0];
   const status = document.getElementById('migrate-status');
-  if (!_migrateTargetProfile) {
-    status.textContent = 'Choisis un profil cible.';
+  if (!currentAuthUser || !currentProfileId) {
+    status.textContent = 'Connecte-toi avec le profil cible avant d’importer.';
     status.className = 'migrate-status err';
     return;
   }
+  if (_migrateTargetProfile && _migrateTargetProfile !== currentProfileId) {
+    status.textContent = 'Tu ne peux importer que dans le profil connecté (' + profileName(currentProfileId) + ').';
+    status.className = 'migrate-status err';
+    return;
+  }
+  _migrateTargetProfile = currentProfileId;
   if (!file) {
     status.textContent = 'Choisis un fichier .json.';
     status.className = 'migrate-status err';
@@ -3106,18 +3224,9 @@ function runMigrateImport() {
       const series = data.series.filter(s => s && s.id && s.name);
       const watched = (data.watched && typeof data.watched === 'object') ? data.watched : {};
       status.textContent = 'Écriture dans Firebase…';
-      userRef(_migrateTargetProfile).once('value').then(snap => {
-        const existing = snap.val() || {};
-        const payload = {
-          series,
-          watched,
-          updatedAt: Date.now()
-        };
-        // conserver le PIN s'il existe déjà
-        if (existing.pin) payload.pin = existing.pin;
-        return userRef(_migrateTargetProfile).set(payload);
-      }).then(() => {
-        status.textContent = `✅ ${series.length} série(s) importée(s) dans le profil ${profileName(_migrateTargetProfile)}.`;
+      const payload = { series, watched, updatedAt: Date.now() };
+      userRef(currentProfileId).update(payload).then(() => {
+        status.textContent = `✅ ${series.length} série(s) importée(s) dans le profil ${profileName(currentProfileId)}.`;
         status.className = 'migrate-status ok';
         fileInput.value = '';
       }).catch(err => {
@@ -3136,41 +3245,15 @@ function runMigrateImport() {
 /* ═══════════════════════════════════════════
    INIT
 ═══════════════════════════════════════════ */
-loadState();
-loadLocalCaches();
 initFirebase();
 
 (function boot() {
   const params = new URLSearchParams(window.location.search);
-  const isMigrate = params.get('migrate') === '1';
-
-  if (isMigrate) {
-    openMigrateOverlay();
-  }
-
-  const saved = getSavedProfileId();
-  if (saved && isDeviceUnlocked(saved)) {
-    // Appareil déjà déverrouillé pour ce profil
-    currentProfileId = saved;
-    authReady = true;
-    updateProfileBadge();
-    startCloudSync(saved);
-    updateBadges();
-    tabLoaded.discover = true;
-    loadPopular();
-  } else if (!isMigrate) {
-    // Premier lancement sur cet appareil → sélecteur de profil
-    // (sauf en mode migration, où on ne force pas l'auth)
-    renderAuthSelect();
-    updateBadges();
-    tabLoaded.discover = true;
-    loadPopular();
-  } else {
-    // Mode migrate sans profil encore validé : on charge l'UI de base
-    updateBadges();
-    tabLoaded.discover = true;
-    loadPopular();
-  }
+  if (params.get('migrate') === '1') openMigrateOverlay();
+  updateBadges();
+  tabLoaded.discover = true;
+  loadPopular();
+  startAuthListener();
 })();
 </script>
 </body>
