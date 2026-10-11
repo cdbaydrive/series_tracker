@@ -634,15 +634,6 @@ header {
 .qc-bar.lo { background: var(--soon); }
 .qc-lbl { font-size: 10px; color: var(--muted); font-weight: 600; }
 
-/* ─── PLAN DE RATTRAPAGE ─── */
-.binge-box { background: var(--surface2); border-radius: var(--radius-sm); padding: 12px 14px; border-left: 3px solid var(--soon); }
-.binge-head { font-size: 13px; font-weight: 600; color: var(--ink); }
-.binge-sub { font-size: 12px; color: var(--ink2); margin-top: 4px; line-height: 1.5; }
-.binge-sel { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
-.binge-sel-lbl { font-size: 11px; color: var(--muted); margin-right: 2px; }
-.binge-pace { width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid var(--rule); background: var(--surface); color: var(--ink2); font-size: 12px; font-weight: 600; cursor: pointer; }
-.binge-pace.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-
 /* ─── WATCHLIST GROUPÉE PAR SÉRIE ─── */
 .wl-group { border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; background: var(--surface); margin: 10px 14px 0; box-shadow: var(--shadow); }
 .wl-group:last-child { margin-bottom: 4px; }
@@ -2379,7 +2370,9 @@ async function openSerieModal(id) {
 
     // saisons & épisodes (uniquement pour les séries suivies)
     if (isFollowed(id)) {
-      content.appendChild(buildBingePlanner(d, id));
+      // Précharge les épisodes (cache) pour que les headers de saisons
+      // affichent immédiatement le statut "vue" / bleu sans clic.
+      try { await ensureEpisodes(id, d); } catch (_) {}
       content.appendChild(buildSeasonsSection(d, id));
     }
 
@@ -2468,64 +2461,6 @@ function buildQualityChart(seasons) {
   return wrap;
 }
 
-/* ── Binge planner : retard + date de fin estimée ── */
-function buildBingePlanner(d, sid) {
-  const frag = document.createDocumentFragment();
-  const title = sectionTitle('Plan de rattrapage');
-  const box = document.createElement('div'); box.className = 'binge-box';
-  box.innerHTML = '<div class="season-eps-loading"><div class="spinner"></div><span>Calcul…</span></div>';
-  frag.appendChild(title); frag.appendChild(box);
-  title.style.display = 'none'; box.style.display = 'none';
-
-  (async () => {
-    try {
-      const eps = await ensureEpisodes(sid, d);
-      const w = S.watched[sid] || {};
-      const pendingEps = eps.filter(ep => isAired(ep.air_date) && !w[epKey(ep.season, ep.episode)]);
-      if (!pendingEps.length) return; // à jour : pas de section
-      const avgRt = (d.episode_run_time && d.episode_run_time[0]) || 45;
-      let mins = 0;
-      for (const ep of pendingEps) mins += (ep.runtime || avgRt);
-      const hrs = Math.floor(mins / 60), rem = mins % 60;
-
-      box.innerHTML = '';
-      const head = document.createElement('div'); head.className = 'binge-head';
-      head.textContent = pendingEps.length + ' épisode' + (pendingEps.length>1?'s':'') + ' de retard · ' + hrs + ' h' + (rem ? ' ' + pad2(rem) : '');
-      box.appendChild(head);
-
-      const sub = document.createElement('div'); sub.className = 'binge-sub';
-      box.appendChild(sub);
-
-      const sel = document.createElement('div'); sel.className = 'binge-sel';
-      const lbl = document.createElement('span'); lbl.className = 'binge-sel-lbl'; lbl.textContent = 'Rythme :';
-      sel.appendChild(lbl);
-      let pace = 2;
-      function renderPlan() {
-        const days = Math.ceil(pendingEps.length / pace);
-        const end = new Date(); end.setDate(end.getDate() + days - 1);
-        let txt = 'À ' + pace + ' ép./soir, terminé le ' + fmtDate(end.toISOString());
-        const ne = d.next_episode_to_air;
-        if (ne && ne.air_date) {
-          const ready = end < new Date(ne.air_date);
-          txt += ready ? ' — prêt avant ' + sxe(ne.season_number, ne.episode_number) + ' ✓'
-                       : ' — après la diffusion de ' + sxe(ne.season_number, ne.episode_number) + ' ⚠️';
-        }
-        sub.textContent = txt;
-      }
-      for (const p of [1,2,3]) {
-        const b = document.createElement('button'); b.className = 'binge-pace' + (p===pace?' active':''); b.textContent = p;
-        b.addEventListener('click', () => { pace = p; sel.querySelectorAll('.binge-pace').forEach(x=>x.classList.toggle('active', Number(x.textContent)===p)); renderPlan(); });
-        sel.appendChild(b);
-      }
-      box.appendChild(sel);
-      renderPlan();
-      title.style.display = ''; box.style.display = '';
-    } catch(e) {}
-  })();
-
-  return frag;
-}
-
 function buildSeasonsSection(d, sid) {
   const frag = document.createDocumentFragment();
   frag.appendChild(sectionTitle('Saisons & épisodes'));
@@ -2548,6 +2483,23 @@ function makeSeasonBlock(seriesId, sid, season, opts) {
   const epCountMeta = season.episode_count || 0;
   let epList = null;          // épisodes bruts (chargés à la demande)
   let rendered = false;
+
+  // Initialise depuis le cache (préchargé à l'ouverture du modal)
+  // pour que le statut "vue" soit correct dès l'affichage.
+  (function initFromCache() {
+    const c = epCache[seriesId];
+    if (!c || !Array.isArray(c.all)) return;
+    const mapped = c.all
+      .filter(ep => ep.season === sn)
+      .map(ep => ({
+        season_number: ep.season,
+        episode_number: ep.episode,
+        name: ep.name,
+        air_date: ep.air_date,
+        runtime: ep.runtime,
+      }));
+    if (mapped.length) epList = mapped;
+  })();
 
   const block = document.createElement('div'); block.className = 'season-block';
 
