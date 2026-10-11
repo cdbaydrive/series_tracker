@@ -751,6 +751,52 @@ header {
 .migrate-status { font-size: 0.9rem; color: var(--muted); margin: 12px 0; min-height: 1.4em; }
 .migrate-status.ok { color: #34d27f; }
 .migrate-status.err { color: #f87171; }
+
+/* ─── POSTER FULLSCREEN VIEWER ─── */
+.poster-viewer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.96);
+  z-index: 1000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  padding-top: calc(var(--safe-top) + 16px);
+  padding-bottom: calc(var(--safe-bot) + 16px);
+}
+.poster-viewer-overlay.open { display: flex; }
+.poster-viewer-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 12px;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+}
+.poster-viewer-close {
+  position: absolute;
+  top: calc(var(--safe-top) + 12px);
+  right: 12px;
+  background: rgba(0, 0, 0, 0.65);
+  border: none;
+  color: #fff;
+  font-size: 22px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1001;
+  transition: background 0.15s;
+}
+.poster-viewer-close:hover { background: rgba(0, 0, 0, 0.9); }
+@media (max-width: 600px) {
+  .poster-viewer-overlay { padding: 8px; }
+  .poster-viewer-img { border-radius: 8px; max-height: 92vh; }
+}
+
 </style>
 
 <!-- Firebase SDK (compat, same pattern as Americano) -->
@@ -1104,6 +1150,7 @@ function applyCloudSnapshot(val) {
   try {
     updateBadges();
     watchlistBuilt = false;
+    refreshFavButtons();
     const active = document.querySelector('.tab-panel.active');
     if (active) {
       if (active.id === 'tab-myseries') renderMySeries();
@@ -1473,6 +1520,17 @@ function favGlyph(saved) {
   return saved
     ? '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="display:block"><path d="M12 2l2.9 6.26L21.5 9.3l-4.75 4.3L18 20.5 12 17l-6 3.5 1.25-6.9L2.5 9.3l6.6-1.04z"/></svg>'
     : '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="display:block"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>';
+}
+
+/** Met à jour tous les boutons + / étoile déjà présents dans le DOM (Découverte, etc.) */
+function refreshFavButtons() {
+  document.querySelectorAll('.btn-add-fav').forEach(b => {
+    const id = Number(b.dataset.id);
+    if (!id) return;
+    const followed = isFollowed(id);
+    b.classList.toggle('saved', followed);
+    b.innerHTML = favGlyph(followed);
+  });
 }
 
 function makePosterEl(serie, options={}) {
@@ -2304,7 +2362,19 @@ async function openSerieModal(id) {
 
     // poster + title
     const prow = document.createElement('div'); prow.className = 'modal-poster-row';
-    if (posterUrl) { const p = document.createElement('img'); p.className = 'modal-poster'; p.src = posterUrl; p.alt = ''; prow.appendChild(p); }
+    if (posterUrl) {
+      const p = document.createElement('img');
+      p.className = 'modal-poster';
+      p.src = posterUrl;
+      p.alt = '';
+      p.style.cursor = 'pointer';
+      p.title = 'Voir l\'affiche en grand';
+      p.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openPosterViewer(IMG_BASE + '/original' + d.poster_path);
+      });
+      prow.appendChild(p);
+    }
     else { const pph = document.createElement('div'); pph.className = 'modal-poster-ph'; pph.textContent = '📺'; prow.appendChild(pph); }
     const tb = document.createElement('div'); tb.className = 'modal-title-block';
     const tt = document.createElement('div'); tt.className = 'modal-title'; tt.textContent = d.name || d.original_name; tb.appendChild(tt);
@@ -2647,6 +2717,50 @@ function makeEpRow(sid, ep, onChange) {
 
   paint();
   return row;
+}
+
+
+/* ─── POSTER FULLSCREEN VIEWER ─── */
+function openPosterViewer(src) {
+  const overlay = document.getElementById('posterViewerOverlay');
+  const img = document.getElementById('posterViewerImg');
+  if (!overlay || !img) return;
+
+  // Empêche le flash de l'ancienne affiche : on masque jusqu'au chargement de la nouvelle
+  img.style.opacity = '0';
+  img.onload = function () {
+    img.style.opacity = '1';
+  };
+  img.onerror = function () {
+    img.style.opacity = '1';
+  };
+  // On vide d'abord pour éviter toute image résiduelle
+  img.removeAttribute('src');
+  img.src = src;
+
+  overlay.classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+function closePosterViewer() {
+  const overlay = document.getElementById('posterViewerOverlay');
+  if (overlay) overlay.classList.remove('open');
+  const img = document.getElementById('posterViewerImg');
+  if (img) {
+    img.src = '';
+    img.style.opacity = '';
+    img.onload = null;
+    img.onerror = null;
+  }
+  // Restaure le scroll seulement si le modal série n'est plus ouvert
+  const modal = document.getElementById('modalOverlay');
+  if (!modal || !modal.classList.contains('open')) {
+    document.body.style.overflow = '';
+  }
+}
+function handlePosterViewerClick(e) {
+  if (e.target === document.getElementById('posterViewerOverlay')) {
+    closePosterViewer();
+  }
 }
 
 function closeModal() { _currentModalId = null; document.getElementById('modalOverlay').classList.remove('open'); document.body.style.overflow = ''; }
@@ -3178,6 +3292,7 @@ async function bindProfile(profileId) {
   }
   startCloudSync(profileId);
   updateBadges();
+  refreshFavButtons();   // les cartes Populaires ont été rendues avant le chargement de S.series
   const active = document.querySelector('.tab-panel.active');
   if (active && active.id === 'tab-myseries' && typeof renderMySeries === 'function') renderMySeries();
   else if (active && active.id === 'tab-watchlist' && typeof rebuildWatchlist === 'function') rebuildWatchlist(false);
@@ -3364,5 +3479,12 @@ initFirebase();
   startAuthListener();
 })();
 </script>
+
+<!-- POSTER FULLSCREEN VIEWER -->
+<div class="poster-viewer-overlay" id="posterViewerOverlay" onclick="handlePosterViewerClick(event)">
+  <button class="poster-viewer-close" onclick="closePosterViewer()" aria-label="Fermer">✕</button>
+  <img id="posterViewerImg" class="poster-viewer-img" alt="Affiche">
+</div>
+
 </body>
 </html>
