@@ -603,9 +603,15 @@ header {
 .season-name { font-size: 13px; font-weight: 600; color: var(--ink); }
 .season-count { font-size: 11px; color: var(--muted); margin-top: 2px; }
 .season-count.done { color: var(--accent); font-weight: 600; }
-.season-toggle { flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%; border: 1.5px solid var(--rule); background: var(--surface); color: var(--muted); font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
+.season-toggle { flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%; border: 1.5px solid var(--rule); background: var(--surface); color: var(--muted); font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s; position: relative; }
 .season-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.season-toggle.partial {
+  background: conic-gradient(var(--accent) calc(var(--pct) * 1%), var(--surface) 0);
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .season-toggle.done { background: var(--accent); border-color: var(--accent); color: #fff; }
+.season-count.partial { color: var(--accent); }
 .season-eps { display: none; border-top: 1px solid var(--rule); }
 .season-block.open .season-eps { display: block; }
 .ep-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px 9px 33px; border-top: 1px solid var(--rule); }
@@ -639,7 +645,7 @@ header {
 .wl-group:last-child { margin-bottom: 4px; }
 .wl-group-head { display: flex; align-items: center; gap: 11px; padding: 10px 12px; cursor: pointer; user-select: none; transition: background 0.15s; }
 .wl-group-head:hover { background: var(--surface2); }
-.wl-group.open .season-chevron { transform: rotate(90deg); }
+/* La flèche des saisons ne doit tourner que quand la saison elle-même est ouverte */
 .wl-group-poster { width: 90px; height: 135px; border-radius: 8px; object-fit: cover; flex-shrink: 0; background: var(--surface2); cursor: pointer; }
 .wl-group-poster-ph { width: 90px; height: 135px; border-radius: 8px; background: var(--surface2); display: flex; align-items: center; justify-content: center; font-size: 30px; color: var(--muted); flex-shrink: 0; }
 .wl-group-info { flex: 1; min-width: 0; }
@@ -1149,12 +1155,22 @@ function applyCloudSnapshot(val) {
   // Rafraîchir les vues
   try {
     updateBadges();
-    watchlistBuilt = false;
     refreshFavButtons();
     const active = document.querySelector('.tab-panel.active');
     if (active) {
       if (active.id === 'tab-myseries') renderMySeries();
-      else if (active.id === 'tab-watchlist') rebuildWatchlist(false);
+      else if (active.id === 'tab-watchlist') {
+        if (openWatchlistGroups.size > 0) {
+          // Des groupes sont ouverts : on met à jour les données sans reconstruire le DOM
+          // (la liste reste ouverte, le re-tri se fera à la fermeture)
+          watchlistData = watchlistData.filter(r => !((S.watched[r.sid] || {})[epKey(r.season, r.episode)]));
+          persistWatchlist();
+          recomputeWatchlistCount();
+        } else {
+          watchlistBuilt = false;
+          rebuildWatchlist(false);
+        }
+      }
       else if (active.id === 'tab-stats') renderStats && renderStats();
     }
   } catch (e) {}
@@ -1857,6 +1873,7 @@ function makeNextEpRow(s) {
 let watchlistBuilt = false;
 let watchlistCount = 0;
 let watchlistData = []; // { sid, name, poster_path, season, episode, epName, air_date, watched, total }
+let openWatchlistGroups = new Set(); // sids des groupes actuellement ouverts (pour ne pas les fermer / re-trier tant qu'ouverts)
 
 function watchlistSignature(rows) {
   let s = rows.length + ':';
@@ -1962,7 +1979,8 @@ async function refreshWatchlistData(forceRender, forceNet) {
   updateBadges();
 
   const onWatchlistTab = document.getElementById('tab-watchlist').classList.contains('active');
-  if (onWatchlistTab && (forceRender || changed)) renderWatchlist();
+  // Ne pas reconstruire le DOM si des groupes sont ouverts (on garde la liste d'épisodes ouverte)
+  if (onWatchlistTab && (forceRender || changed) && openWatchlistGroups.size === 0) renderWatchlist();
 
   // Plateformes : second passage, après l'affichage, pour ne pas ralentir la liste.
   enrichWatchlistProviders();
@@ -1995,7 +2013,7 @@ async function enrichWatchlistProviders() {
       touched = true;
     }
   }
-  if (touched && document.getElementById('tab-watchlist').classList.contains('active')) renderWatchlist();
+  if (touched && document.getElementById('tab-watchlist').classList.contains('active') && openWatchlistGroups.size === 0) renderWatchlist();
 }
 
 function cleanProviderName(name) {
@@ -2174,6 +2192,7 @@ function makeWatchlistGroup(g) {
   paintHeader(g.eps.length);
 
   function removeGroup() {
+    openWatchlistGroups.delete(g.sid);
     block.style.transition = 'opacity 0.2s, transform 0.2s';
     block.style.opacity = '0'; block.style.transform = 'translateX(20px)';
     setTimeout(() => {
@@ -2195,23 +2214,34 @@ function makeWatchlistGroup(g) {
   info.addEventListener('click', async () => {
     const opening = !block.classList.contains('open');
     block.classList.toggle('open');
-    if (opening && !built) {
-      built = true;
-      body.innerHTML = '<div class="season-eps-loading"><div class="spinner"></div><span>Chargement…</span></div>';
-      try {
-        const d = (detailsCache[g.sid] && detailsCache[g.sid].data) || await ensureDetails(g.sid);
-        const seasons = (d.seasons || [])
-          .filter(s => s.season_number >= 1 && seasonPending(g.sid, s.season_number) > 0)
-          .sort((a, b) => a.season_number - b.season_number);
-        body.innerHTML = '';
-        if (!seasons.length) { body.innerHTML = '<div class="season-eps-loading">Rien à voir.</div>'; return; }
-        const acc = document.createElement('div'); acc.className = 'season-acc'; acc.style.padding = '8px 10px';
-        for (const s of seasons) acc.appendChild(makeSeasonBlock(g.sid, g.sid, s, { onChange }));
-        body.appendChild(acc);
-      } catch(err) {
-        body.innerHTML = '<div class="season-eps-loading">Erreur de chargement.</div>';
-        built = false;
+    if (opening) {
+      openWatchlistGroups.add(g.sid);
+      if (!built) {
+        built = true;
+        body.innerHTML = '<div class="season-eps-loading"><div class="spinner"></div><span>Chargement…</span></div>';
+        try {
+          const d = (detailsCache[g.sid] && detailsCache[g.sid].data) || await ensureDetails(g.sid);
+          const seasons = (d.seasons || [])
+            .filter(s => s.season_number >= 1 && seasonPending(g.sid, s.season_number) > 0)
+            .sort((a, b) => a.season_number - b.season_number);
+          body.innerHTML = '';
+          if (!seasons.length) { body.innerHTML = '<div class="season-eps-loading">Rien à voir.</div>'; return; }
+          const acc = document.createElement('div'); acc.className = 'season-acc'; acc.style.padding = '8px 10px';
+          for (const s of seasons) acc.appendChild(makeSeasonBlock(g.sid, g.sid, s, { onChange }));
+          body.appendChild(acc);
+        } catch(err) {
+          body.innerHTML = '<div class="season-eps-loading">Erreur de chargement.</div>';
+          built = false;
+        }
       }
+    } else {
+      // Fermeture : on retire du set puis on re-trie la liste (repositionnement chronologique)
+      openWatchlistGroups.delete(g.sid);
+      setTimeout(() => {
+        if (document.getElementById('tab-watchlist') && document.getElementById('tab-watchlist').classList.contains('active')) {
+          renderWatchlist();
+        }
+      }, 30);
     }
   });
 
@@ -2219,15 +2249,14 @@ function makeWatchlistGroup(g) {
     e.stopPropagation();
     const c = epCache[g.sid];
     if (!c) { showToast('Données en cours de chargement…'); return; }
-    if (!S.watched[g.sid]) S.watched[g.sid] = {};
     let n = 0;
     for (const ep of c.all) {
-      const k = epKey(ep.season, ep.episode);
-      if (isAired(ep.air_date) && !S.watched[g.sid][k]) { S.watched[g.sid][k] = true; n++; }
+      if (isAired(ep.air_date) && !(S.watched[g.sid] && S.watched[g.sid][epKey(ep.season, ep.episode)])) {
+        setEpisodeWatched(g.sid, ep.season, ep.episode, true);
+        n++;
+      }
     }
     if (!n) { showToast('Déjà à jour'); return; }
-    saveState();
-    invalidateWatchlist();
     const s = n > 1 ? 's' : '';
     showToast('✓ ' + n + ' épisode' + s + ' de « ' + g.name + ' » marqué' + s + ' vu' + s);
     removeGroup();
@@ -2510,6 +2539,24 @@ function invalidateWatchlist() {
   recomputeWatchlistCount();       // badge à jour (ne replie pas l'accordéon)
 }
 
+/* Source unique : toute action vu/non-vu passe par ici */
+function setEpisodeWatched(sid, season, episode, isWatched) {
+  if (!S.watched[sid]) S.watched[sid] = {};
+  const k = epKey(season, episode);
+  if (isWatched) S.watched[sid][k] = true;
+  else delete S.watched[sid][k];
+  saveState();
+  invalidateWatchlist();
+}
+
+function refreshWatchlistIfVisible() {
+  const tab = document.getElementById('tab-watchlist');
+  if (!tab || !tab.classList.contains('active')) return;
+  // Force la reconstruction depuis la source unique S.watched
+  openWatchlistGroups.clear();
+  renderWatchlist();
+}
+
 /* ── Courbe de qualité : note moyenne TMDB par saison ── */
 function buildQualityChart(seasons) {
   const wrap = document.createElement('div'); wrap.className = 'quality-chart';
@@ -2612,8 +2659,17 @@ function makeSeasonBlock(seriesId, sid, season, opts) {
     }
     cnt.textContent = seen + ' / ' + epCountMeta + ' épisodes' + suffix;
     const done = !!suffix;
+    const pct = epCountMeta ? Math.round((seen / epCountMeta) * 100) : 0;
+
     cnt.classList.toggle('done', done);
+    cnt.classList.toggle('partial', !done && pct > 0);
     toggle.classList.toggle('done', done);
+    toggle.classList.toggle('partial', !done && pct > 0);
+    if (!done && pct > 0) {
+      toggle.style.setProperty('--pct', pct);
+    } else {
+      toggle.style.removeProperty('--pct');
+    }
   }
 
   function refreshEpRows() {
@@ -2654,12 +2710,10 @@ function makeSeasonBlock(seriesId, sid, season, opts) {
     const aired = eps.filter(ep => isAired(ep.air_date));
     if (!aired.length) { showToast('Aucun épisode encore diffusé'); return; }
     if (!S.watched[sid]) S.watched[sid] = {};
-    const allSeen = aired.every(ep => S.watched[sid][epKey(ep.season_number, ep.episode_number)]);
+    const allSeen = aired.every(ep => S.watched[sid] && S.watched[sid][epKey(ep.season_number, ep.episode_number)]);
     for (const ep of aired) {
-      const k = epKey(ep.season_number, ep.episode_number);
-      if (allSeen) delete S.watched[sid][k]; else S.watched[sid][k] = true;
+      setEpisodeWatched(sid, ep.season_number, ep.episode_number, !allSeen);
     }
-    saveState();
     notifyChange();
     if (rendered) refreshEpRows();
     refreshHeader();
@@ -2707,10 +2761,8 @@ function makeEpRow(sid, ep, onChange) {
   }
   chk.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (!S.watched[sid]) S.watched[sid] = {};
-    if (S.watched[sid][key]) delete S.watched[sid][key];
-    else S.watched[sid][key] = true;
-    saveState();
+    const currently = !!(S.watched[sid] && S.watched[sid][key]);
+    setEpisodeWatched(sid, sn, en, !currently);
     paint();
     if (onChange) onChange();
   });
@@ -2763,7 +2815,13 @@ function handlePosterViewerClick(e) {
   }
 }
 
-function closeModal() { _currentModalId = null; document.getElementById('modalOverlay').classList.remove('open'); document.body.style.overflow = ''; }
+function closeModal() {
+  _currentModalId = null;
+  document.getElementById('modalOverlay').classList.remove('open');
+  document.body.style.overflow = '';
+  // Synchronise la watchlist avec la source unique après une éventuelle modif depuis le modal
+  refreshWatchlistIfVisible();
+}
 function handleModalClick(e) { if (e.target === document.getElementById('modalOverlay')) closeModal(); }
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
