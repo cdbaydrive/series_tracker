@@ -997,6 +997,7 @@ const PROFILES = [
   { id: 'sebastien', name: 'Sébastien' },
   { id: 'bernard',   name: 'Bernard' },
   { id: 'calyssie',   name: 'Calyssie' },
+  { id: 'alycia',   name: 'Alycia' },
 ];
 const EMAIL_PREFIX = 'seriestracker-email-';
 
@@ -1017,7 +1018,7 @@ let firebaseApp = null;
 let firebaseDb = null;
 let firebaseAuth = null;
 let currentAuthUser = null;
-let currentProfileId = null;   // 'cyril' | 'sebastien' | 'bernard' | 'calyssie' — résolu via /access/{uid}
+let currentProfileId = null;   // 'cyril' | 'sebastien' | 'bernard' | 'calyssie' | 'alycia' — résolu via /access/{uid}
 let cloudListener = null;
 let connListener = null;
 let suppressCloudPush = false; // true pendant application d'un snapshot distant
